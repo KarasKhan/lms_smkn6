@@ -181,17 +181,22 @@ const klikKeluar = () => {
         </button>
       </div>
 
-      <div class="mt-2">
+      <div class="mt-4">
         <h2 class="text-lg font-black text-slate-800 leading-tight truncate">
           {{ kelas ? kelas.nama_matpel : 'Memuat...' }}
         </h2>
-        <div class="flex items-center gap-2 mt-1" v-if="kelas">
-          <div
-            class="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-[9px]"
-          >
-            {{ kelas.guru_nama.charAt(0) }}
+        <div v-if="kelas" class="mt-3">
+          <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
+            Guru Pengampu
+          </p>
+          <div class="flex items-center gap-2">
+            <div
+              class="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-[10px] shrink-0"
+            >
+              {{ kelas.guru_nama ? kelas.guru_nama.charAt(0) : '?' }}
+            </div>
+            <p class="text-xs font-bold text-slate-600 truncate">{{ kelas.guru_nama }}</p>
           </div>
-          <p class="text-[11px] font-bold text-slate-500">{{ kelas.guru_nama }}</p>
         </div>
       </div>
     </div>

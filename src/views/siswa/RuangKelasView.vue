@@ -370,40 +370,61 @@ const kirimKuis = async (jawaban) => {
             </h1>
           </div>
 
-          <div class="hidden md:flex items-center gap-2 shrink-0">
-            <span
-              v-if="statusSubBabAktif === 'selesai' || statusSubBabAktif === 'dinilai'"
-              class="text-[9px] font-black uppercase tracking-widest bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-md border border-emerald-200 flex items-center gap-1"
-            >
-              ✓ Selesai
-            </span>
-            <span
-              v-else-if="statusSubBabAktif === 'revisi'"
-              class="text-[9px] font-black uppercase tracking-widest bg-rose-100 text-rose-700 px-2.5 py-1 rounded-md border border-rose-200 flex items-center gap-1 animate-pulse"
-            >
-              ⚠️ Perlu Revisi
-            </span>
-            <span
-              v-else-if="statusSubBabAktif === 'menunggu'"
-              class="text-[9px] font-black uppercase tracking-widest bg-amber-100 text-amber-700 px-2.5 py-1 rounded-md border border-amber-200 flex items-center gap-1 animate-pulse"
-            >
-              Menunggu Penilaian
-            </span>
+          <div class="flex items-center gap-2 md:gap-4 shrink-0">
+            <div class="flex items-center gap-2">
+              <span
+                v-if="statusSubBabAktif === 'selesai' || statusSubBabAktif === 'dinilai'"
+                class="text-[9px] font-black uppercase tracking-widest bg-emerald-100 text-emerald-700 px-2 py-1 rounded-md border border-emerald-200 flex items-center gap-1"
+              >
+                ✓ Selesai
+              </span>
+              <span
+                v-else-if="statusSubBabAktif === 'revisi'"
+                class="text-[9px] font-black uppercase tracking-widest bg-rose-100 text-rose-700 px-2 py-1 rounded-md border border-rose-200 flex items-center gap-1 animate-pulse"
+              >
+                ⚠️ Revisi
+              </span>
+              <span
+                v-else-if="statusSubBabAktif === 'menunggu'"
+                class="text-[9px] font-black uppercase tracking-widest bg-amber-100 text-amber-700 px-2 py-1 rounded-md border border-amber-200 flex items-center gap-1 animate-pulse"
+              >
+                Menunggu
+              </span>
+              <span
+                v-if="subBabAktif.tipe !== 'materi' && subBabAktif.deadline"
+                class="hidden sm:inline-block text-red-600 bg-red-50 px-2 py-1 text-[9px] font-bold rounded-md border border-red-100 uppercase tracking-widest"
+              >
+                Tenggat:
+                {{
+                  new Date(subBabAktif.deadline).toLocaleString('id-ID', {
+                    day: 'numeric',
+                    month: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                }}
+              </span>
+            </div>
 
-            <span
-              v-if="subBabAktif.tipe !== 'materi' && subBabAktif.deadline"
-              class="text-red-600 bg-red-50 px-2.5 py-1 text-[9px] font-bold rounded-md border border-red-100 uppercase tracking-widest"
-            >
-              Tenggat:
-              {{
-                new Date(subBabAktif.deadline).toLocaleString('id-ID', {
-                  day: 'numeric',
-                  month: 'short',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
-              }}
-            </span>
+            <div class="hidden sm:block w-px h-8 bg-slate-200"></div>
+
+            <div class="flex items-center gap-2 md:gap-3">
+              <div class="text-right hidden sm:block">
+                <p
+                  class="text-xs font-black text-slate-800 leading-none truncate max-w-[120px] md:max-w-[160px]"
+                >
+                  {{ dataSiswaSaatIni?.nama || 'Memuat...' }}
+                </p>
+                <p class="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1.5">
+                  {{ dataSiswaSaatIni?.rombel || '-' }} • {{ nisLogin }}
+                </p>
+              </div>
+              <div
+                class="w-7 h-7 md:w-8 md:h-8 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] md:text-xs font-black shrink-0 shadow-inner"
+              >
+                {{ dataSiswaSaatIni?.nama ? dataSiswaSaatIni.nama.charAt(0) : 'S' }}
+              </div>
+            </div>
           </div>
         </header>
 

@@ -1,10 +1,12 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useWakaStore } from '../../stores/wakaStore'
+import { useUiStore } from '../../stores/uiStore'
 import { db } from '../../firebase'
 import { doc, writeBatch } from 'firebase/firestore'
 
 const wakaStore = useWakaStore()
+const uiStore = useUiStore()
 
 // State Formulir
 const rombelAsal = ref('')
@@ -70,6 +72,9 @@ const prosesKenaikan = async () => {
 
   sedangMemproses.value = true
 
+  // Tampilkan layar loading dan kunci aksi pengguna
+  uiStore.showLoading(`Memigrasi ${jumlahDipromosikan.value} siswa ke kelas baru...`)
+
   try {
     const siswaNaik = listSiswaLokal.value.filter((s) => s.dipilih)
 
@@ -110,6 +115,9 @@ const prosesKenaikan = async () => {
     alert('Terjadi kesalahan sistem saat memperbarui data server.')
   } finally {
     sedangMemproses.value = false
+
+    // Matikan layar loading saat proses selesai
+    uiStore.hideLoading()
   }
 }
 </script>

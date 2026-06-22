@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
+import { useUiStore } from '../../../stores/uiStore'
 
 const props = defineProps({
   dataSiswa: Object, // Props baru untuk menerima data lengkap profil dan history siswa
@@ -9,6 +10,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['kirim-tugas', 'kirim-kuis'])
+const uiStore = useUiStore() // Inisialisasi UI Store
 
 const jawabanKuis = ref({})
 const inputTugasURL = ref('')
@@ -98,6 +100,10 @@ const handleKirimTugas = async () => {
 
   if (izinkanPDF.value && fileTugas.value) {
     sedangUploadFile.value = true
+
+    // TAMPILKAN LOADING SAAT UPLOAD FILE
+    uiStore.showLoading('Sedang mengunggah berkas PDF tugas Anda...')
+
     const formData = new FormData()
     formData.append('image', fileTugas.value)
 
@@ -108,17 +114,26 @@ const handleKirimTugas = async () => {
         payload.pdf = hasil.url
       } else {
         sedangUploadFile.value = false
+        uiStore.hideLoading() // MATIKAN LOADING JIKA GAGAL
         return alert(hasil.message || 'Gagal mengunggah file.')
       }
     } catch (error) {
-      console.error('Upload gagal:', error) // <-- Tambahkan baris ini agar variabel terpakai
+      console.error('Upload gagal:', error)
       sedangUploadFile.value = false
+      uiStore.hideLoading() // MATIKAN LOADING JIKA KONEKSI PUTUS
       return alert('Terjadi kesalahan jaringan saat mengunggah ke server.')
+    } finally {
+      // Pastikan status loading upload file dimatikan
+      uiStore.hideLoading()
     }
   }
 
-  if (Object.keys(payload).length === 0)
+  if (Object.keys(payload).length === 0) {
     return alert('Silakan lampirkan tugas Anda sebelum mengumpulkan!')
+  }
+
+  // TAMPILKAN LOADING UNTUK SIMPAN KE FIRESTORE
+  uiStore.showLoading('Menyimpan tugas ke buku nilai guru...')
   emit('kirim-tugas', payload)
 }
 
@@ -126,6 +141,9 @@ const handleKirimKuis = () => {
   if (Object.keys(jawabanKuis.value).length < props.subBabAktif.daftar_soal.length) {
     if (!confirm('Masih ada soal kosong. Yakin ingin mengumpulkan?')) return
   }
+
+  // TAMPILKAN LOADING UNTUK SIMPAN KUIS KE FIRESTORE
+  uiStore.showLoading('Mengumpulkan lembar jawaban kuis...')
   emit('kirim-kuis', jawabanKuis.value)
 }
 </script>

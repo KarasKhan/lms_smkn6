@@ -4,9 +4,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { db } from '../../firebase'
 import { doc, getDoc, runTransaction } from 'firebase/firestore'
 import { Html5Qrcode } from 'html5-qrcode'
+import { useUiStore } from '../../stores/uiStore'
 
 const route = useRoute()
 const router = useRouter()
+const uiStore = useUiStore()
 
 const idKelas = route.params.idKelas ? route.params.idKelas.trim() : ''
 const nisLogin = localStorage.getItem('user_nip')
@@ -135,6 +137,9 @@ const eksekusiAbsensiKehadiran = async (inputKarakter) => {
   pesanError.value = ''
   pesanSukses.value = ''
 
+  // Tampilkan layar loading dan kunci aksi pengguna
+  uiStore.showLoading('Memvalidasi token kehadiran Anda...')
+
   try {
     const docRef = doc(db, 'kelas', idKelas)
 
@@ -208,6 +213,9 @@ const eksekusiAbsensiKehadiran = async (inputKarakter) => {
     pesanError.value = err.message || 'Terjadi kegagalan jaringan Firestore. Coba lagi.'
   } finally {
     sedangMemproses.value = false
+
+    // Matikan layar loading saat proses selesai
+    uiStore.hideLoading()
   }
 }
 </script>

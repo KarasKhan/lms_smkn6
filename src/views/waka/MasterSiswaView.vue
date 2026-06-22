@@ -4,8 +4,10 @@ import * as XLSX from 'xlsx'
 import { db } from '../../firebase'
 import { doc, writeBatch, updateDoc } from 'firebase/firestore'
 import { useWakaStore } from '../../stores/wakaStore'
+import { useUiStore } from '../../stores/uiStore'
 
 const wakaStore = useWakaStore()
+const uiStore = useUiStore()
 
 // State UI
 const modeUpload = ref(false)
@@ -128,6 +130,9 @@ const simpanKeFirebase = async () => {
   sedangMengunggah.value = true
   pesanStatus.value = 'Memproses unggahan data...'
 
+  // Tampilkan layar loading yang mengunci aksi pengguna
+  uiStore.showLoading('Mengekstrak dan menyimpan data Excel ke server...')
+
   try {
     let urutanData = 0
     const UKURAN_BATCH = 400
@@ -155,6 +160,9 @@ const simpanKeFirebase = async () => {
   } finally {
     sedangMengunggah.value = false
     pesanStatus.value = ''
+
+    // Matikan layar loading saat proses selesai (baik berhasil maupun gagal)
+    uiStore.hideLoading()
   }
 }
 

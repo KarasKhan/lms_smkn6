@@ -38,7 +38,7 @@ const prosesLogout = () => {
 </script>
 
 <template>
-  <div class="flex h-screen bg-[#F8FAFC] font-sans text-slate-800">
+  <div class="flex h-[100dvh] bg-[#F8FAFC] font-sans text-slate-800">
     <div
       v-if="menuMobileBuka"
       @click="toggleMenu"
