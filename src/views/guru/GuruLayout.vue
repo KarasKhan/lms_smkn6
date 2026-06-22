@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { RouterView, RouterLink, useRouter, useRoute } from 'vue-router'
 
 const router = useRouter()
@@ -7,6 +7,7 @@ const route = useRoute()
 const profilBuka = ref(false)
 const menuMobileBuka = ref(false)
 const sidebarDesktopBuka = ref(true)
+const tampilHeader = ref(true)
 
 const namaGuru = ref('Memuat...')
 const nipGuru = ref('...')
@@ -15,6 +16,20 @@ onMounted(() => {
   namaGuru.value = localStorage.getItem('user_nama') || 'Guru'
   nipGuru.value = localStorage.getItem('user_nip') || '...'
 })
+
+watch(
+  () => route.name,
+  (namaRute) => {
+    if (namaRute === 'guru-detail-kelas') {
+      sidebarDesktopBuka.value = false
+      tampilHeader.value = false
+    } else {
+      sidebarDesktopBuka.value = true
+      tampilHeader.value = true
+    }
+  },
+  { immediate: true },
+)
 
 const toggleProfil = () => {
   profilBuka.value = !profilBuka.value
@@ -103,7 +118,8 @@ const prosesLogout = () => {
 
     <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
       <header
-        class="h-20 bg-white/70 backdrop-blur-md border-b border-slate-200/50 flex items-center justify-between px-4 lg:px-8 sticky top-0 z-30 shrink-0"
+        v-if="tampilHeader"
+        class="h-20 bg-white/70 backdrop-blur-md border-b border-slate-200/50 flex items-center justify-between px-4 lg:px-8 sticky top-0 z-30 shrink-0 transition-all duration-300"
       >
         <div class="flex items-center gap-3 lg:gap-4 shrink-0">
           <button

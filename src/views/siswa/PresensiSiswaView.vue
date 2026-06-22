@@ -2,8 +2,8 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { db } from '../../firebase'
-import { doc, getDoc, updateDoc } from 'firebase/firestore'
-import { Html5Qrcode, Html5QrcodeScanner } from 'html5-qrcode'
+import { doc, getDoc, runTransaction } from 'firebase/firestore'
+import { Html5Qrcode } from 'html5-qrcode'
 
 const route = useRoute()
 const router = useRouter()
@@ -55,15 +55,24 @@ const initKameraScanner = () => {
     const readerEl = document.getElementById('reader-kamera')
     if (!readerEl) return
 
+    // Menggunakan Html5Qrcode murni untuk mem-bypass UI bawaan
+    html5QrcodeScanner = new Html5Qrcode('reader-kamera')
     const config = { fps: 10, qrbox: { width: 250, height: 250 } }
-    html5QrcodeScanner = new Html5QrcodeScanner('reader-kamera', config, false)
-    html5QrcodeScanner.render(onScanSuccess, onScanFailure)
+
+    // Memaksa menggunakan kamera belakang (environment)
+    html5QrcodeScanner
+      .start({ facingMode: 'environment' }, config, onScanSuccess, onScanFailure)
+      .catch((err) => {
+        console.error(err)
+        pesanError.value =
+          'Gagal mengakses kamera belakang. Pastikan izin kamera di browser sudah diberikan.'
+      })
   }, 300)
 }
 
 const stopScanner = () => {
-  if (html5QrcodeScanner) {
-    html5QrcodeScanner.clear().catch((err) => console.error(err))
+  if (html5QrcodeScanner && html5QrcodeScanner.isScanning) {
+    html5QrcodeScanner.stop().catch((err) => console.error(err))
   }
 }
 
@@ -128,75 +137,75 @@ const eksekusiAbsensiKehadiran = async (inputKarakter) => {
 
   try {
     const docRef = doc(db, 'kelas', idKelas)
-    const snap = await getDoc(docRef)
 
-    if (!snap.exists()) {
-      pesanError.value = 'Dokumen kelas ini sudah tidak tersedia di server.'
-      sedangMemproses.value = false
-      return
-    }
+    // Membungkus proses presensi ke dalam Transaction Firestore
+    await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(docRef)
 
-    const dataTerbaru = snap.data()
-    kelas.value = dataTerbaru
-
-    if (!dataTerbaru.pertemuan || dataTerbaru.pertemuan.length === 0) {
-      pesanError.value = 'Guru belum membuka sesi presensi untuk pertemuan ini.'
-      sedangMemproses.value = false
-      return
-    }
-
-    const targetClean = inputKarakter.trim().toUpperCase()
-    const sesi = dataTerbaru.pertemuan.find(
-      (p) =>
-        p.id === inputKarakter.trim() || p.pin?.toString().trim().toUpperCase() === targetClean,
-    )
-
-    if (!sesi) {
-      pesanError.value = 'Token PIN / QR Code tidak dikenali atau salah!'
-      sedangMemproses.value = false
-      return
-    }
-
-    const waktuBuat = new Date(sesi.waktu_dibuat)
-    const menitDurasi = sesi.durasi || 15
-    const waktuTenggatAbsen = new Date(waktuBuat.getTime() + menitDurasi * 60000)
-    const sekarang = new Date()
-
-    if (sekarang > waktuTenggatAbsen) {
-      pesanError.value = `Sesi presensi telah ditutup otomatis karena melewati batas ${menitDurasi} menit.`
-      sedangMemproses.value = false
-      return
-    }
-
-    const listSiswa = JSON.parse(JSON.stringify(dataTerbaru.siswa))
-    const idx = listSiswa.findIndex((s) => s.nis === nisLogin)
-
-    if (idx !== -1) {
-      const dataSiswa = listSiswa[idx]
-
-      // LOGIKA BARU: Validasi Lintas Rombel
-      if (sesi.rombel && dataSiswa.rombel !== sesi.rombel) {
-        pesanError.value = `Akses Ditolak: Sesi ini khusus untuk kelas ${sesi.rombel}. Anda terdaftar di kelas ${dataSiswa.rombel}.`
-        sedangMemproses.value = false
-        return
+      if (!snap.exists()) {
+        throw new Error('Dokumen kelas ini sudah tidak tersedia di server.')
       }
 
-      if (!dataSiswa.kehadiran) dataSiswa.kehadiran = {}
-      dataSiswa.kehadiran[sesi.id] = 'H'
+      const dataTerbaru = snap.data()
 
-      await updateDoc(docRef, { siswa: listSiswa })
+      if (!dataTerbaru.pertemuan || dataTerbaru.pertemuan.length === 0) {
+        throw new Error('Guru belum membuka sesi presensi untuk pertemuan ini.')
+      }
 
-      pesanSukses.value = 'Validasi Berhasil! Kehadiran Anda telah tercatat.'
+      const targetClean = inputKarakter.trim().toUpperCase()
+      const sesi = dataTerbaru.pertemuan.find(
+        (p) =>
+          p.id === inputKarakter.trim() || p.pin?.toString().trim().toUpperCase() === targetClean,
+      )
 
-      setTimeout(() => {
-        router.replace(`/siswa/kelas/${idKelas}`)
-      }, 2000)
-    } else {
-      pesanError.value = `Akses Ditolak: Anda tidak terdaftar dalam mata pelajaran ini.`
-    }
+      if (!sesi) {
+        throw new Error('Token PIN / QR Code tidak dikenali atau salah!')
+      }
+
+      const waktuBuat = new Date(sesi.waktu_dibuat)
+      const menitDurasi = sesi.durasi || 15
+      const waktuTenggatAbsen = new Date(waktuBuat.getTime() + menitDurasi * 60000)
+      const sekarang = new Date()
+
+      if (sekarang > waktuTenggatAbsen) {
+        throw new Error(
+          `Sesi presensi telah ditutup otomatis karena melewati batas ${menitDurasi} menit.`,
+        )
+      }
+
+      const listSiswa = JSON.parse(JSON.stringify(dataTerbaru.siswa))
+      const idx = listSiswa.findIndex((s) => s.nis === nisLogin)
+
+      if (idx !== -1) {
+        const dataSiswa = listSiswa[idx]
+
+        // Validasi Lintas Rombel
+        if (sesi.rombel && dataSiswa.rombel !== sesi.rombel) {
+          throw new Error(
+            `Akses Ditolak: Sesi ini khusus untuk kelas ${sesi.rombel}. Anda terdaftar di kelas ${dataSiswa.rombel}.`,
+          )
+        }
+
+        if (!dataSiswa.kehadiran) dataSiswa.kehadiran = {}
+        dataSiswa.kehadiran[sesi.id] = 'H'
+
+        // Menyimpan data terbaru ke Firestore secara atomik
+        transaction.update(docRef, { siswa: listSiswa })
+      } else {
+        throw new Error('Akses Ditolak: Anda tidak terdaftar dalam mata pelajaran ini.')
+      }
+    })
+
+    // --- Jika transaksi berhasil melewati blok di atas tanpa error ---
+    pesanSukses.value = 'Validasi Berhasil! Kehadiran Anda telah tercatat.'
+
+    setTimeout(() => {
+      router.replace(`/siswa/kelas/${idKelas}`)
+    }, 2000)
   } catch (err) {
-    console.error(err)
-    pesanError.value = 'Terjadi kegagalan jaringan Firestore. Coba lagi.'
+    console.error('Transaksi Absensi Gagal:', err)
+    // Menangkap pesan error spesifik dari 'throw new Error' di dalam transaksi
+    pesanError.value = err.message || 'Terjadi kegagalan jaringan Firestore. Coba lagi.'
   } finally {
     sedangMemproses.value = false
   }

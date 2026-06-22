@@ -13,6 +13,7 @@
 ├── package.json
 ├── postcss.config.js
 ├── public
+│   ├── _redirects
 │   ├── favicon.ico
 │   └── logo_smkn6.png
 ├── src
@@ -222,21 +223,21 @@ export default {
 ============================================================
 📄 FILE: src/App.vue
 ============================================================
-<script setup>
+<!-- <script setup>
 import { RouterView } from 'vue-router'
 </script>
 
 <template>
   <RouterView />
-</template>
+</template> -->
 
-<!-- <script setup>
+<script setup>
 import { onMounted, onUnmounted } from 'vue'
 import { RouterView } from 'vue-router'
 
-// Fungsi untuk memblokir kombinasi tombol Inspect Element dan Klik Kanan
+// Fungsi untuk memblokir kombinasi tombol Inspect Element dan View Source
 const blokirInspeksi = (e) => {
-  // Blokir F12
+  // Blokir tombol F12
   if (e.key === 'F12' || e.keyCode === 123) {
     e.preventDefault()
   }
@@ -247,7 +248,7 @@ const blokirInspeksi = (e) => {
   if (e.ctrlKey && e.key === 'U') {
     e.preventDefault()
   }
-  // Untuk Mac (Cmd+Option+I dsb)
+  // Untuk pengguna Mac (Cmd+Option+I dsb)
   if (e.metaKey && e.altKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) {
     e.preventDefault()
   }
@@ -256,18 +257,19 @@ const blokirInspeksi = (e) => {
   }
 }
 
+// Fungsi untuk memblokir Klik Kanan
 const blokirKlikKanan = (e) => {
   e.preventDefault()
 }
 
 onMounted(() => {
-  // Pasang pelindung saat aplikasi dimuat
+  // Pasang pelindung saat aplikasi pertama kali dimuat
   document.addEventListener('contextmenu', blokirKlikKanan)
   document.addEventListener('keydown', blokirInspeksi)
 })
 
 onUnmounted(() => {
-  // Bersihkan event listener jika aplikasi ditutup (opsional tapi best practice)
+  // Bersihkan event listener jika aplikasi ditutup (best practice)
   document.removeEventListener('contextmenu', blokirKlikKanan)
   document.removeEventListener('keydown', blokirInspeksi)
 })
@@ -275,7 +277,7 @@ onUnmounted(() => {
 
 <template>
   <RouterView />
-</template> -->
+</template>
 
 
 ============================================================
@@ -780,7 +782,6 @@ const password = ref('')
 const loading = ref(false)
 const errorMsg = ref('')
 
-// STATE BARU: Mengontrol visibilitas popup uji coba
 const tampilPopupUjiCoba = ref(true)
 
 const handleLogin = async () => {
@@ -792,7 +793,7 @@ const handleLogin = async () => {
 
   loading.value = true
   try {
-    // --- BYPASS UNTUK WAKA KURIKULUM (Menerima 'admin123' atau 'admin 123') ---
+    // --- BYPASS UNTUK WAKA KURIKULUM ---
     if (
       username.value === 'admin' &&
       (password.value === 'admin123' || password.value === 'admin 123')
@@ -805,12 +806,16 @@ const handleLogin = async () => {
     }
 
     // --- CEK KE FIRESTORE UNTUK GURU / SISWA ---
-    const docRef = doc(db, 'users', username.value)
+    const docRef = doc(db, 'users', username.value.trim())
     const snap = await getDoc(docRef)
 
     if (snap.exists()) {
       const data = snap.data()
-      if (data.password === password.value) {
+
+      // PERBAIKAN: Jika password di database kosong (karena baru didaftar), otomatis gunakan '123456'
+      const passwordDatabase = data.password || '123456'
+
+      if (passwordDatabase === password.value) {
         localStorage.setItem('user_role', data.role)
         localStorage.setItem('user_nama', data.nama)
         localStorage.setItem('user_nip', snap.id)
@@ -1030,7 +1035,7 @@ const handleLogin = async () => {
               <span class="font-bold text-slate-600">Akses Waka</span>
               <span
                 class="font-mono font-bold text-emerald-700 bg-white px-2.5 py-1 rounded shadow-sm border border-emerald-100 text-[11px]"
-                >admin / admin 123</span
+                >admin / admin123</span
               >
             </div>
             <!-- Akses Guru -->
