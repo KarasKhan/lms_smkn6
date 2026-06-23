@@ -139,6 +139,7 @@ const daftarSemuaKegiatan = computed(() => {
     urutanKuis = 1
 
   props.kelas.struktur_materi.forEach((bab) => {
+    if ((bab.semester || '1') !== semesterAktif.value) return
     if (bab.sub_bab) {
       bab.sub_bab.forEach((sub) => {
         let kodeUnik = ''
