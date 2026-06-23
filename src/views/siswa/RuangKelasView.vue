@@ -5,9 +5,11 @@ import { db } from '../../firebase'
 import { doc, getDoc, updateDoc } from 'firebase/firestore'
 import SidebarSilabus from './ruang-kelas/SidebarSilabus.vue'
 import CanvasBelajar from './ruang-kelas/CanvasBelajar.vue'
+import { useUiStore } from '../../stores/uiStore'
 
 const route = useRoute()
 const router = useRouter()
+const uiStore = useUiStore()
 const idKelas = route.params.id
 const nisLogin = localStorage.getItem('user_nip')
 
@@ -30,6 +32,18 @@ const waktuTeks = computed(() => {
   return `${m}:${s}`
 })
 
+// STATE BARU: Semester aktif untuk tampilan siswa (Default 1)
+const semesterAktif = ref('1')
+
+// COMPUTED BARU: Menyaring bab berdasarkan semester aktif
+const strukturMateriTerfilter = computed(() => {
+  if (!kelas.value || !kelas.value.struktur_materi) return []
+  return kelas.value.struktur_materi.filter((bab) => {
+    const sem = bab.semester || '1'
+    return sem === semesterAktif.value
+  })
+})
+
 const ambilDataKelas = async () => {
   sedangMemuat.value = true
   try {
@@ -42,13 +56,18 @@ const ambilDataKelas = async () => {
 
       if (data.materi_terakhir) {
         let foundSub = null
+        let foundSemester = '1' // Lacak semester dari materi terakhir
         data.struktur_materi.forEach((bab) => {
           if (bab.sub_bab) {
             const match = bab.sub_bab.find((s) => s.id === data.materi_terakhir)
-            if (match) foundSub = match
+            if (match) {
+              foundSub = match
+              foundSemester = bab.semester || '1'
+            }
           }
         })
         if (foundSub) {
+          semesterAktif.value = foundSemester // Otomatis buka semester materi terakhir
           muatSubBab(foundSub)
         }
       }
@@ -94,18 +113,20 @@ const statusSubBabAktif = computed(() => {
   return 'belum'
 })
 
+// PERBAIKAN: Gunakan strukturMateriTerfilter agar nama bab akurat per semester
 const namaBabAktif = computed(() => {
-  if (!kelas.value || !subBabAktif.value) return ''
-  const bab = kelas.value.struktur_materi.find(
+  if (!strukturMateriTerfilter.value || !subBabAktif.value) return ''
+  const bab = strukturMateriTerfilter.value.find(
     (b) => b.sub_bab && b.sub_bab.some((s) => s.id === subBabAktif.value.id),
   )
   return bab ? bab.judul : ''
 })
 
+// PERBAIKAN: Tombol Selanjutnya/Sebelumnya hanya membaca materi di SEMESTER yang sedang dibuka
 const daftarUrutanMateri = computed(() => {
-  if (!kelas.value || !kelas.value.struktur_materi) return []
+  if (!strukturMateriTerfilter.value) return []
   const urutan = []
-  kelas.value.struktur_materi.forEach((bab) => {
+  strukturMateriTerfilter.value.forEach((bab) => {
     if (bab.sub_bab) {
       bab.sub_bab.forEach((sub) => {
         urutan.push({ babId: bab.id, sub })
@@ -195,7 +216,6 @@ const navigasiSelanjutnya = async () => {
 }
 
 const navigasiSebelumnya = () => {
-  // PENCEGAHAN KLIK TOMBOL 'SEBELUMNYA' JIKA TIMER AKTIF
   if (sisaDetik.value > 0) {
     if (
       !confirm(
@@ -220,6 +240,7 @@ const kirimTugas = async (payload) => {
     nilai_pembelajaran: 'menunggu',
     waktu_kumpul: new Date().toISOString(),
   })
+  uiStore.hideLoading()
   alert('Tugas berhasil dikumpulkan dan menunggu penilaian.')
 }
 
@@ -229,6 +250,7 @@ const kirimKuis = async (jawaban) => {
     nilai_pembelajaran: 'menunggu',
     waktu_kumpul: new Date().toISOString(),
   })
+  uiStore.hideLoading()
   alert('Jawaban kuis berhasil dikumpulkan!')
 }
 </script>
@@ -241,15 +263,23 @@ const kirimKuis = async (jawaban) => {
       class="absolute inset-0 bg-slate-900/40 z-40 lg:hidden backdrop-blur-sm transition-opacity"
     ></div>
 
-    <!-- KIRIM PROPS sedangMembaca -->
+    <!-- KIRIM PROPS SEMESTER DAN MATERI TERFILTER KE SIDEBAR -->
     <SidebarSilabus
       :kelas="kelas"
+      :materi-terfilter="strukturMateriTerfilter"
+      :semester-aktif="semesterAktif"
       :bab-terbuka="babTerbuka"
       :sub-bab-aktif="subBabAktif"
       :nis-login="nisLogin"
       :tampil-sidebar-mobile="tampilSidebarMobile"
       :tampil-sidebar-desktop="tampilSidebarDesktop"
       :sedang-membaca="sisaDetik > 0"
+      @ganti-semester="
+        (val) => {
+          semesterAktif = val
+          subBabAktif = null
+        }
+      "
       @toggle-bab="toggleBab"
       @muat-sub-bab="muatSubBab"
       @keluar-kelas="router.push('/siswa')"
@@ -302,7 +332,7 @@ const kirimKuis = async (jawaban) => {
           </div>
           <h2 class="text-lg font-black text-slate-800 mb-2">Pilih Materi Pembelajaran</h2>
           <p class="text-sm font-medium text-slate-500 max-w-sm leading-relaxed">
-            Buka menu silabus di sebelah kiri untuk mulai membaca materi kelas.
+            Buka menu silabus di sebelah kiri untuk mulai membaca materi kelas pada semester ini.
           </p>
         </div>
       </div>

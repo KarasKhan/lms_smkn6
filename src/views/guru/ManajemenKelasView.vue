@@ -112,7 +112,10 @@ const eksekusiSesiAbsensi = async (dataSesi) => {
     const docRef = doc(db, 'kelas', kelasAktifBuka.value.id)
     const pertemuanAsli = kelasAktifBuka.value.pertemuan || []
 
-    const totalSesiRombelIni = pertemuanAsli.filter((p) => p.rombel === dataSesi.rombel).length
+    // Hitung jumlah sesi untuk menentukan kode otomatis (P1, P2, dst) HANYA untuk semester dan rombel yang sama
+    const totalSesiRombelIni = pertemuanAsli.filter(
+      (p) => p.rombel === dataSesi.rombel && (p.semester || '1') === dataSesi.semester,
+    ).length
 
     const tgl = new Date()
     const namaBulan = [
@@ -134,7 +137,8 @@ const eksekusiSesiAbsensi = async (dataSesi) => {
     const dataPertemuanBaru = {
       id: dataSesi.id,
       rombel: dataSesi.rombel,
-      kode: `H${totalSesiRombelIni + 1}`,
+      semester: dataSesi.semester, // <--- TAMBAHAN: Simpan Semester
+      kode: `P${totalSesiRombelIni + 1}`, // Menggunakan P (Pertemuan)
       judul: `${tanggalFormat}`,
       pin: dataSesi.pin,
       durasi: dataSesi.durasi,
@@ -145,6 +149,23 @@ const eksekusiSesiAbsensi = async (dataSesi) => {
     await updateDoc(docRef, { pertemuan: pertemuanUpdate })
   } catch (error) {
     console.error('Gagal open live session:', error)
+  }
+}
+
+// FUNGSI BARU: Untuk membatalkan sesi saat di layar QR
+const batalkanSesiAbsensi = async (idSesi) => {
+  try {
+    const docRef = doc(db, 'kelas', kelasAktifBuka.value.id)
+    const snap = await getDoc(docRef)
+    if (snap.exists()) {
+      const data = snap.data()
+      // Hapus sesi dari array pertemuan
+      const pertemuanBaru = (data.pertemuan || []).filter((p) => p.id !== idSesi)
+      await updateDoc(docRef, { pertemuan: pertemuanBaru })
+    }
+    tampilModalBukaKelas.value = false // Tutup Modal
+  } catch (error) {
+    console.error('Gagal membatalkan sesi:', error)
   }
 }
 
@@ -388,6 +409,7 @@ const simpanRekapAbsensi = async (payload) => {
         @tutup="tampilModalBukaKelas = false"
         @sesi-dibuka="eksekusiSesiAbsensi"
         @simpan-rekap="simpanRekapAbsensi"
+        @batalkan-sesi="batalkanSesiAbsensi"
       />
     </Teleport>
   </div>

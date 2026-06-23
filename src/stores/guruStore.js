@@ -84,12 +84,18 @@ export const useGuruStore = defineStore('guru', {
     },
 
     // --- MANAJEMEN STRUKTUR MATERI (BAB) ---
-    async tambahBab(idKelas, namaBab) {
+    async tambahBab(idKelas, namaBab, semester) {
       try {
         const docRef = doc(db, 'kelas', idKelas)
         const docSnap = await getDoc(docRef)
         const struktur = docSnap.data().struktur_materi || []
-        struktur.push({ id: Date.now().toString(), judul: namaBab, sub_bab: [] })
+        // Tambahkan property semester ke dalam objek Bab
+        struktur.push({
+          id: Date.now().toString(),
+          judul: namaBab,
+          semester: semester,
+          sub_bab: [],
+        })
         await updateDoc(docRef, { struktur_materi: struktur })
         return true
       } catch (e) {
@@ -98,7 +104,7 @@ export const useGuruStore = defineStore('guru', {
       }
     },
 
-    async editBab(idKelas, idBab, judulBaru) {
+    async editBab(idKelas, idBab, judulBaru, semesterBaru) {
       try {
         const docRef = doc(db, 'kelas', idKelas)
         const docSnap = await getDoc(docRef)
@@ -106,6 +112,8 @@ export const useGuruStore = defineStore('guru', {
         const index = struktur.findIndex((b) => b.id === idBab)
         if (index !== -1) {
           struktur[index].judul = judulBaru
+          // Update juga semesternya
+          struktur[index].semester = semesterBaru
           await updateDoc(docRef, { struktur_materi: struktur })
         }
         return true

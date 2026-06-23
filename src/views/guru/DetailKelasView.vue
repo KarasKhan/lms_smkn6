@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { db } from '../../firebase'
 import { doc, getDoc, updateDoc } from 'firebase/firestore'
@@ -22,7 +22,11 @@ const sedangMemproses = ref(false)
 const babTerbuka = ref([])
 const sedangSetPenanda = ref(false)
 
-const formBab = ref({ id: null, judul: '' })
+// STATE BARU: Menyimpan status tab semester yang sedang dibuka (Default 1 / Ganjil)
+const semesterAktif = ref('1')
+
+// UPDATE: Form Bab sekarang memiliki penampung untuk semester
+const formBab = ref({ id: null, judul: '', semester: '1' })
 
 const formSub = ref({
   id: null,
@@ -41,14 +45,33 @@ const editorRef = ref(null)
 const dragBabIndex = ref(null)
 const dragSubInfo = ref({ bIndex: null, sIndex: null })
 
+// COMPUTED BARU: Menyaring daftar Bab berdasarkan tab semester yang aktif
+const strukturMateriTerfilter = computed(() => {
+  if (!kelas.value || !kelas.value.struktur_materi) return []
+  return kelas.value.struktur_materi.filter((bab) => {
+    const sem = bab.semester || '1' // Antisipasi untuk data lama yang belum punya property semester
+    return sem === semesterAktif.value
+  })
+})
+
 const onDragStartBab = (bIndex) => {
   dragBabIndex.value = bIndex
 }
+
+// UPDATE: Logika drag drop disesuaikan untuk mencari index asli (karena index UI sudah terfilter)
 const onDropBab = async (targetIndex) => {
   if (dragBabIndex.value === null || dragBabIndex.value === targetIndex) return
+
+  const draggedBab = strukturMateriTerfilter.value[dragBabIndex.value]
+  const targetBab = strukturMateriTerfilter.value[targetIndex]
+
   const struktur = [...kelas.value.struktur_materi]
-  const [item] = struktur.splice(dragBabIndex.value, 1)
-  struktur.splice(targetIndex, 0, item)
+  const origDragIndex = struktur.findIndex((b) => b.id === draggedBab.id)
+  const [item] = struktur.splice(origDragIndex, 1)
+
+  const origTargetIndex = struktur.findIndex((b) => b.id === targetBab.id)
+  struktur.splice(origTargetIndex, 0, item)
+
   kelas.value.struktur_materi = struktur
   await guruStore.updateStrukturMateri(idKelas, struktur)
   dragBabIndex.value = null
@@ -57,15 +80,22 @@ const onDropBab = async (targetIndex) => {
 const onDragStartSub = (bIndex, sIndex) => {
   dragSubInfo.value = { bIndex, sIndex }
 }
+
+// UPDATE: Logika drag drop sub-bab disesuaikan dengan ID bab asli
 const onDropSub = async (targetBIndex, targetSIndex) => {
   const source = dragSubInfo.value
   if (source.bIndex === null) return
   if (source.bIndex !== targetBIndex) return alert('Hanya bisa digeser di dalam Bab yang sama.')
   if (source.sIndex === targetSIndex) return
+
+  const targetBabId = strukturMateriTerfilter.value[targetBIndex].id
   const struktur = [...kelas.value.struktur_materi]
-  const bab = struktur[targetBIndex]
+  const babIndex = struktur.findIndex((b) => b.id === targetBabId)
+
+  const bab = struktur[babIndex]
   const [item] = bab.sub_bab.splice(source.sIndex, 1)
   bab.sub_bab.splice(targetSIndex, 0, item)
+
   kelas.value.struktur_materi = struktur
   await guruStore.updateStrukturMateri(idKelas, struktur)
   dragSubInfo.value = { bIndex: null, sIndex: null }
@@ -123,13 +153,11 @@ const customImageHandler = () => {
   }
 }
 
-// LOGIKA BARU: Handler Video Kustom untuk layout responsif dan mematikan error Iklan YouTube
 const customVideoHandler = () => {
   const url = prompt('Masukkan Tautan Video (YouTube):')
   if (!url) return
 
   let embedUrl = url
-  // Mengonversi link YouTube standar menjadi link Embed tanpa-cookie
   const ytMatch = url.match(
     /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&?]+)/,
   )
@@ -147,7 +175,6 @@ const customVideoHandler = () => {
   const insertIndex = range ? range.index : quill.getLength()
 
   quill.insertEmbed(insertIndex, 'video', embedUrl)
-  // Menambahkan baris kosong setelah video agar kursor tidak nyangkut
   quill.insertText(insertIndex + 1, '\n')
   quill.setSelection(insertIndex + 2)
 }
@@ -174,7 +201,7 @@ const opsiEditor = {
       ],
       handlers: {
         image: customImageHandler,
-        video: customVideoHandler, // Mendaftarkan handler video baru
+        video: customVideoHandler,
       },
     },
     clipboard: {
@@ -234,22 +261,32 @@ const setPenandaTerakhir = async (idSub) => {
   sedangSetPenanda.value = false
 }
 
+// UPDATE: Reset formBab dengan menempelkan default semester yang sedang aktif
 const siapkanTambahBab = () => {
-  formBab.value = { id: null, judul: '' }
+  formBab.value = { id: null, judul: '', semester: semesterAktif.value }
   modeLayar.value = 'tambah_bab'
 }
+
+// UPDATE: Tangkap semester saat memuat data Bab untuk diedit
 const editBab = (bab) => {
-  formBab.value = { id: bab.id, judul: bab.judul }
+  formBab.value = { id: bab.id, judul: bab.judul, semester: bab.semester || '1' }
   modeLayar.value = 'tambah_bab'
 }
+
+// UPDATE: Kirim parameter semester saat save ke Pinia Store
 const simpanBab = async () => {
   if (!formBab.value.judul) return alert('Nama bab wajib diisi.')
   sedangMemproses.value = true
   let sukses
   if (formBab.value.id) {
-    sukses = await guruStore.editBab(idKelas, formBab.value.id, formBab.value.judul)
+    sukses = await guruStore.editBab(
+      idKelas,
+      formBab.value.id,
+      formBab.value.judul,
+      formBab.value.semester,
+    )
   } else {
-    sukses = await guruStore.tambahBab(idKelas, formBab.value.judul)
+    sukses = await guruStore.tambahBab(idKelas, formBab.value.judul, formBab.value.semester)
   }
   if (sukses) {
     await ambilDataKelas()
@@ -257,6 +294,7 @@ const simpanBab = async () => {
   }
   sedangMemproses.value = false
 }
+
 const hapusBab = async (idBab, judul) => {
   if (confirm(`Hapus seluruh Bab "${judul}" beserta isinya?`)) {
     await guruStore.hapusBab(idKelas, idBab)
@@ -400,23 +438,46 @@ const batalkanEdit = () => {
       <div
         class="w-full lg:w-[380px] flex flex-col bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden h-full shrink-0"
       >
-        <div
-          class="p-5 border-b border-gray-100 bg-gray-50 flex justify-between items-center shrink-0"
-        >
+        <div class="p-5 border-b border-gray-100 bg-gray-50 flex flex-col gap-4 shrink-0">
           <h2 class="font-bold text-gray-800 tracking-tight">Struktur Materi</h2>
+
+          <div class="flex bg-white p-1 border border-gray-200 rounded-lg">
+            <button
+              @click="semesterAktif = '1'"
+              :class="[
+                'flex-1 py-1.5 text-xs font-bold rounded-md transition-colors',
+                semesterAktif === '1'
+                  ? 'bg-blue-50 text-blue-700 shadow-sm'
+                  : 'text-gray-500 hover:bg-gray-50',
+              ]"
+            >
+              Ganjil (1)
+            </button>
+            <button
+              @click="semesterAktif = '2'"
+              :class="[
+                'flex-1 py-1.5 text-xs font-bold rounded-md transition-colors',
+                semesterAktif === '2'
+                  ? 'bg-blue-50 text-blue-700 shadow-sm'
+                  : 'text-gray-500 hover:bg-gray-50',
+              ]"
+            >
+              Genap (2)
+            </button>
+          </div>
         </div>
 
         <div class="flex-1 overflow-y-auto p-4 space-y-4">
           <div
-            v-if="!kelas.struktur_materi || kelas.struktur_materi.length === 0"
+            v-if="!strukturMateriTerfilter || strukturMateriTerfilter.length === 0"
             class="text-center text-sm text-gray-400 py-4"
           >
-            Belum ada bab yang dibuat.
+            Belum ada bab untuk semester ini.
           </div>
 
           <div
             v-else
-            v-for="(bab, bIndex) in kelas.struktur_materi"
+            v-for="(bab, bIndex) in strukturMateriTerfilter"
             :key="bab.id"
             class="border-l-2 border-gray-200 pl-3 group mb-2"
             draggable="true"
@@ -723,6 +784,17 @@ const batalkanEdit = () => {
           <h3 class="text-lg font-bold text-gray-800 mb-6 text-center">
             {{ formBab.id ? 'Edit Bab' : 'Buat Bab Baru' }}
           </h3>
+
+          <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Pilih Semester</label>
+          <select
+            v-model="formBab.semester"
+            class="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm focus:ring-1 focus:ring-blue-500 outline-none mb-4 bg-white"
+          >
+            <option value="1">Semester 1 (Ganjil)</option>
+            <option value="2">Semester 2 (Genap)</option>
+          </select>
+
+          <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Judul Bab</label>
           <input
             type="text"
             v-model="formBab.judul"

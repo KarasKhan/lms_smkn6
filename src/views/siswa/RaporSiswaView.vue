@@ -1,11 +1,14 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { db } from '../../firebase'
 import { doc, getDoc, collection, getDocs } from 'firebase/firestore'
 
 const nisLogin = ref(localStorage.getItem('user_nip') || '')
 const sedangMemuat = ref(true)
-const daftarRapor = ref([])
+
+// STATE BARU: Menyimpan data mentah kelas & status semester
+const kelasDataMentah = ref([])
+const semesterAktif = ref('1')
 
 onMounted(async () => {
   sedangMemuat.value = true
@@ -19,25 +22,15 @@ onMounted(async () => {
 
       if (rombelAktifSiswa) {
         const kelasSnap = await getDocs(collection(db, 'kelas'))
-        const hasilRapor = []
+        const tempKelas = []
 
         kelasSnap.forEach((k) => {
           const kelasData = k.data()
-
           if (kelasData.rombel_target && kelasData.rombel_target.includes(rombelAktifSiswa)) {
-            const hasilKalkulasi = hitungRaporKelas(kelasData, nisLogin.value)
-            if (hasilKalkulasi) {
-              hasilRapor.push({
-                id: k.id,
-                nama_matpel: kelasData.nama_matpel,
-                guru_nama: kelasData.guru_nama,
-                tahun_ajaran: kelasData.tahun_ajaran,
-                ...hasilKalkulasi,
-              })
-            }
+            tempKelas.push({ id: k.id, ...kelasData })
           }
         })
-        daftarRapor.value = hasilRapor.sort((a, b) => a.nama_matpel.localeCompare(b.nama_matpel))
+        kelasDataMentah.value = tempKelas
       }
     }
   } catch (error) {
@@ -46,21 +39,44 @@ onMounted(async () => {
   sedangMemuat.value = false
 })
 
-const hitungRaporKelas = (kelasData, nis) => {
+// COMPUTED BARU: Kalkulasi rapor otomatis menyesuaikan semester yang dipilih
+const daftarRapor = computed(() => {
+  if (kelasDataMentah.value.length === 0) return []
+
+  const hasilRapor = []
+  kelasDataMentah.value.forEach((kelasData) => {
+    const hasilKalkulasi = hitungRaporKelas(kelasData, nisLogin.value, semesterAktif.value)
+    if (hasilKalkulasi) {
+      hasilRapor.push({
+        id: kelasData.id,
+        nama_matpel: kelasData.nama_matpel,
+        guru_nama: kelasData.guru_nama,
+        tahun_ajaran: kelasData.tahun_ajaran,
+        ...hasilKalkulasi,
+      })
+    }
+  })
+  return hasilRapor.sort((a, b) => a.nama_matpel.localeCompare(b.nama_matpel))
+})
+
+const hitungRaporKelas = (kelasData, nis, semesterTarget) => {
   const siswaData = kelasData.siswa?.find((s) => s.nis === nis)
   if (!siswaData) return null
 
-  // 1. Cek Ketuntasan & Kalkulasi Nilai Pembelajaran
+  // FILTER MATERI BERDASARKAN SEMESTER SAJA
+  const struktur = (kelasData.struktur_materi || []).filter(
+    (bab) => (bab.semester || '1') === semesterTarget,
+  )
+
   let totalMateriKBM = 0
   let selesaiMateriKBM = 0
   let totalMateri = 0,
-    selesaiMateri = 0,
-    totalNilaiTugas = 0,
-    countTugas = 0,
-    totalNilaiKuis = 0,
+    selesaiMateri = 0
+  let totalNilaiTugas = 0,
+    countTugas = 0
+  let totalNilaiKuis = 0,
     countKuis = 0
 
-  const struktur = kelasData.struktur_materi || []
   struktur.forEach((bab) => {
     bab.sub_bab?.forEach((sub) => {
       totalMateriKBM++
@@ -89,10 +105,12 @@ const hitungRaporKelas = (kelasData, nis) => {
     })
   })
 
-  // Status Tuntas: Semua materi ada dan sudah dikerjakan/dinilai semua
-  const isTuntas = totalMateriKBM > 0 && selesaiMateriKBM === totalMateriKBM
+  // Jika semester ini belum ada materi, tandai agar UI bisa menampilkan pesan khusus
+  if (totalMateriKBM === 0) {
+    return { isTuntas: false, pembelajaran: 0, kehadiran: 0, final: 0, adaMateri: false }
+  }
 
-  // Kalkulasi Nilai Pembelajaran berdasarkan persentase
+  const isTuntas = totalMateriKBM > 0 && selesaiMateriKBM === totalMateriKBM
   const formulaRapor = kelasData.pengaturan_rapor || { materi: 20, tugas: 30, kuis: 50 }
   const capaianMateri = totalMateri > 0 ? (selesaiMateri / totalMateri) * 100 : 0
   const rataTugas = countTugas > 0 ? totalNilaiTugas / countTugas : 0
@@ -103,7 +121,6 @@ const hitungRaporKelas = (kelasData, nis) => {
     rataTugas * (formulaRapor.tugas / 100) +
     rataKuis * (formulaRapor.kuis / 100)
 
-  // 2. Kalkulasi Nilai Kehadiran (Khusus rombel siswa)
   let totalHadir = 0
   const pertemuanKhusus = (kelasData.pertemuan || []).filter((p) => p.rombel === siswaData.rombel)
   const totalSesi = pertemuanKhusus.length
@@ -114,8 +131,6 @@ const hitungRaporKelas = (kelasData, nis) => {
     })
   }
   const nilaiKehadiran = totalSesi > 0 ? (totalHadir / totalSesi) * 100 : 0
-
-  // 3. Kalkulasi Nilai Akhir (Berdasarkan bobot rekapitulasi)
   const bobotRekap = kelasData.bobot_rekap || { pembelajaran: 70, kehadiran: 30 }
   const pmb = isNaN(nilaiPembelajaran) ? 0 : Math.round(nilaiPembelajaran)
   const khd = isNaN(nilaiKehadiran) ? 0 : Math.round(nilaiKehadiran)
@@ -127,6 +142,7 @@ const hitungRaporKelas = (kelasData, nis) => {
     pembelajaran: pmb,
     kehadiran: khd,
     final: isNaN(finalScore) ? 0 : Math.round(finalScore),
+    adaMateri: true,
   }
 }
 </script>
@@ -140,8 +156,37 @@ const hitungRaporKelas = (kelasData, nis) => {
         </h1>
         <p class="text-sm text-slate-500 mt-2 max-w-2xl leading-relaxed">
           Pantau hasil evaluasi belajar dan persentase kehadiran Anda. Nilai Akhir hanya akan
-          diterbitkan oleh sistem jika Anda telah menyelesaikan seluruh rangkaian materi kelas.
+          diterbitkan oleh sistem jika Anda telah menyelesaikan seluruh rangkaian materi kelas di
+          semester tersebut.
         </p>
+      </div>
+
+      <div
+        v-if="!sedangMemuat && kelasDataMentah.length > 0"
+        class="flex bg-white p-1 border border-slate-200 rounded-xl max-w-sm mb-6 shadow-sm"
+      >
+        <button
+          @click="semesterAktif = '1'"
+          :class="[
+            'flex-1 py-2.5 text-sm font-bold rounded-lg transition-colors',
+            semesterAktif === '1'
+              ? 'bg-emerald-50 text-emerald-700 shadow-sm border border-emerald-100'
+              : 'text-slate-500 hover:bg-slate-50',
+          ]"
+        >
+          Semester Ganjil
+        </button>
+        <button
+          @click="semesterAktif = '2'"
+          :class="[
+            'flex-1 py-2.5 text-sm font-bold rounded-lg transition-colors',
+            semesterAktif === '2'
+              ? 'bg-emerald-50 text-emerald-700 shadow-sm border border-emerald-100'
+              : 'text-slate-500 hover:bg-slate-50',
+          ]"
+        >
+          Semester Genap
+        </button>
       </div>
 
       <div
@@ -176,8 +221,12 @@ const hitungRaporKelas = (kelasData, nis) => {
           :key="rapor.id"
           class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:flex-row relative group hover:border-emerald-300 transition-colors"
         >
-          <!-- Indikator Strip Samping Kiri -->
-          <div :class="['w-2 shrink-0', rapor.isTuntas ? 'bg-emerald-500' : 'bg-slate-200']"></div>
+          <div
+            :class="[
+              'w-2 shrink-0',
+              rapor.adaMateri && rapor.isTuntas ? 'bg-emerald-500' : 'bg-slate-200',
+            ]"
+          ></div>
 
           <div class="p-6 lg:p-8 flex-1 flex flex-col">
             <div class="flex items-center justify-between mb-4">
@@ -187,7 +236,7 @@ const hitungRaporKelas = (kelasData, nis) => {
                 TA. {{ rapor.tahun_ajaran }}
               </span>
               <span
-                v-if="rapor.isTuntas"
+                v-if="rapor.adaMateri && rapor.isTuntas"
                 class="text-[10px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-md flex items-center gap-1"
               >
                 ✓ Kelas Tuntas
@@ -199,7 +248,7 @@ const hitungRaporKelas = (kelasData, nis) => {
             </h3>
             <p class="text-xs font-bold text-slate-500 mb-8">{{ rapor.guru_nama }}</p>
 
-            <div class="grid grid-cols-2 gap-4 mt-auto">
+            <div v-if="rapor.adaMateri" class="grid grid-cols-2 gap-4 mt-auto">
               <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
                 <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
                   Rata-rata Tugas & Ujian
@@ -215,9 +264,17 @@ const hitungRaporKelas = (kelasData, nis) => {
                 </p>
               </div>
             </div>
+
+            <div
+              v-else
+              class="mt-auto bg-slate-50 p-4 rounded-2xl border border-slate-100 text-center"
+            >
+              <p class="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                Belum Ada Materi di Semester Ini
+              </p>
+            </div>
           </div>
 
-          <!-- BAGIAN NILAI AKHIR (KANAN) -->
           <div
             class="bg-slate-50 lg:w-48 p-6 lg:p-8 border-t lg:border-t-0 lg:border-l border-slate-100 flex flex-col items-center justify-center text-center shrink-0"
           >
@@ -225,7 +282,10 @@ const hitungRaporKelas = (kelasData, nis) => {
               Nilai Akhir Pembelajaran
             </p>
 
-            <div v-if="rapor.isTuntas" class="flex flex-col items-center justify-center">
+            <div
+              v-if="rapor.adaMateri && rapor.isTuntas"
+              class="flex flex-col items-center justify-center"
+            >
               <p class="text-6xl font-black text-slate-800 tracking-tighter">{{ rapor.final }}</p>
               <div
                 class="mt-4 px-3 py-1 bg-emerald-100 text-emerald-700 text-[9px] font-black uppercase tracking-widest rounded border border-emerald-200"

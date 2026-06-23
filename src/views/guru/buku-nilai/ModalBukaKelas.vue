@@ -12,6 +12,7 @@ const emit = defineEmits(['tutup', 'sesi-dibuka', 'simpan-rekap'])
 // Mode Layar: 'pilih_rombel' | 'qr' | 'resume'
 const modeLayar = ref('pilih_rombel')
 const rombelTerpilih = ref('')
+const semesterSesi = ref('1')
 
 const pinKelas = ref('')
 const qrCodeUrl = ref('')
@@ -58,7 +59,16 @@ const konfirmasiPilihanRombel = (rombelName) => {
     pin: pinKelas.value,
     durasi: 15,
     rombel: rombelTerpilih.value,
+    semester: semesterSesi.value,
   })
+}
+
+// FUNGSI BARU: Batalkan di Layar QR
+const klikBatalSesiQR = () => {
+  if (confirm('Batalkan kelas hari ini? Kode QR akan hangus dan data tidak tersimpan.')) {
+    clearInterval(intervalTimer)
+    emit('batalkan-sesi', idSesiAktif.value)
+  }
 }
 
 const generatePIN = () => {
@@ -153,21 +163,42 @@ const simpanPermanen = () => {
       <div
         class="w-full max-w-md bg-white rounded-3xl border border-slate-200 p-8 shadow-2xl text-center"
       >
-        <span class="text-4xl block mb-3"></span>
-        <h3 class="text-xl font-black text-slate-800 tracking-tight">Konfirmasi Kelas Mengajar</h3>
+        <span class="text-4xl block mb-3">👨‍🏫</span>
+        <h3 class="text-xl font-black text-slate-800 tracking-tight">Konfirmasi Sesi Kelas</h3>
         <p class="text-sm text-slate-500 mt-2 mb-6">
-          Mata pelajaran ini mengampu lebih dari satu rombel pararel. Rombel manakah yang sedang
-          Anda ajar di jam ini?
+          Pilih Rombel dan Semester untuk sesi pertemuan ini.
         </p>
 
-        <div class="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+        <!-- PILIH SEMESTER -->
+        <div class="flex bg-slate-100 p-1 rounded-xl mb-5 border border-slate-200">
+          <button
+            @click="semesterSesi = '1'"
+            :class="[
+              'flex-1 py-2 text-xs font-bold rounded-lg transition',
+              semesterSesi === '1' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500',
+            ]"
+          >
+            Semester 1 (Ganjil)
+          </button>
+          <button
+            @click="semesterSesi = '2'"
+            :class="[
+              'flex-1 py-2 text-xs font-bold rounded-lg transition',
+              semesterSesi === '2' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500',
+            ]"
+          >
+            Semester 2 (Genap)
+          </button>
+        </div>
+
+        <div class="space-y-2.5 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
           <button
             v-for="rombel in listRombelSaran"
             :key="rombel"
             @click="konfirmasiPilihanRombel(rombel)"
-            class="w-full py-3.5 px-4 border-2 border-slate-100 bg-slate-50 rounded-xl font-black text-slate-700 text-sm hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700 transition"
+            class="w-full py-3 px-4 border-2 border-slate-100 bg-slate-50 rounded-xl font-black text-slate-700 text-sm hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700 transition"
           >
-            {{ rombel }}
+            Mulai Kelas: {{ rombel }}
           </button>
         </div>
 
@@ -216,13 +247,21 @@ const simpanPermanen = () => {
             <p class="text-2xl font-black text-slate-800 font-mono">{{ waktuBerjalan }}</p>
           </div>
 
-          <button
-            v-if="modeLayar === 'qr'"
-            @click="lanjutKeResume"
-            class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition shadow-md flex items-center gap-2"
-          >
-            Kunci Akses & Tinjau Rekap &rarr;
-          </button>
+          <div v-if="modeLayar === 'qr'" class="flex gap-2">
+            <!-- TOMBOL BATAL BARU -->
+            <button
+              @click="klikBatalSesiQR"
+              class="bg-rose-50 text-rose-600 hover:bg-rose-100 px-4 py-3 rounded-xl font-bold transition flex items-center gap-2 border border-rose-200"
+            >
+              Batalkan Sesi
+            </button>
+            <button
+              @click="lanjutKeResume"
+              class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition shadow-md flex items-center gap-2"
+            >
+              Kunci Akses & Tinjau Rekap &rarr;
+            </button>
+          </div>
 
           <div v-else class="flex gap-3">
             <button

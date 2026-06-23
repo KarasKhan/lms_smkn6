@@ -13,9 +13,15 @@ const emit = defineEmits(['update-bobot-rekap'])
 const route = useRoute()
 
 const rombelPilihan = ref('Semua')
+const semesterAktif = ref('1')
 
 const bobotRekap = computed(() => {
   return props.kelas.bobot_rekap || { pembelajaran: 70, kehadiran: 30 }
+})
+
+// MENGAMBIL PENGATURAN POIN KEHADIRAN (H, S, I, A) DARI DATABASE
+const pengaturanKehadiran = computed(() => {
+  return props.kelas.pengaturan_kehadiran || { p: 100, s: 100, i: 70, a: 0 }
 })
 
 const tampilModalBobot = ref(false)
@@ -64,7 +70,8 @@ const daftarKolomKegiatan = computed(() => {
   if (!props.kelas || !props.kelas.struktur_materi) return []
   const kolom = []
   props.kelas.struktur_materi.forEach((bab) => {
-    if (bab.sub_bab) {
+    const sem = bab.semester || '1'
+    if (sem === semesterAktif.value && bab.sub_bab) {
       bab.sub_bab.forEach((sub) => kolom.push(sub))
     }
   })
@@ -73,10 +80,10 @@ const daftarKolomKegiatan = computed(() => {
 
 const dapatkanKalkulasiSiswa = (siswa) => {
   let totalMateri = 0,
-    selesaiMateri = 0,
-    totalNilaiTugas = 0,
-    countTugas = 0,
-    totalNilaiKuis = 0,
+    selesaiMateri = 0
+  let totalNilaiTugas = 0,
+    countTugas = 0
+  let totalNilaiKuis = 0,
     countKuis = 0
 
   daftarKolomKegiatan.value.forEach((kegiatan) => {
@@ -109,19 +116,29 @@ const dapatkanKalkulasiSiswa = (siswa) => {
     rataTugas * (formulaRapor.tugas / 100) +
     rataKuis * (formulaRapor.kuis / 100)
 
-  // LOGIKA BARU: Hitung Kehadiran Berdasarkan Rombel Siswa Sendiri
-  let totalHadir = 0
+  // LOGIKA BARU: Hitung Kehadiran Berdasarkan Formula Pengaturan Poin (H/P, S, I, A)
+  let totalPoinHadir = 0
   const pertemuanKhususRombelIni = (props.kelas.pertemuan || []).filter(
-    (p) => p.rombel === siswa.rombel,
+    (p) => p.rombel === siswa.rombel && (p.semester || '1') === semesterAktif.value, // <--- TAMBAHKAN FILTER INI
   )
   const totalSesi = pertemuanKhususRombelIni.length
+  const bobotHadir = pengaturanKehadiran.value
 
   if (totalSesi > 0) {
     pertemuanKhususRombelIni.forEach((sesi) => {
-      if (siswa.kehadiran?.[sesi.id] === 'H') totalHadir++
+      let status = siswa.kehadiran?.[sesi.id]
+      if (status === 'H') status = 'P' // Backward Compatibility
+
+      if (status === 'P') totalPoinHadir += Number(bobotHadir.p)
+      else if (status === 'S') totalPoinHadir += Number(bobotHadir.s)
+      else if (status === 'I') totalPoinHadir += Number(bobotHadir.i)
+      else if (status === 'A') totalPoinHadir += Number(bobotHadir.a)
+      else totalPoinHadir += Number(bobotHadir.a)
     })
   }
-  const nilaiKehadiran = totalSesi > 0 ? (totalHadir / totalSesi) * 100 : 0
+
+  const maksimalPoin = totalSesi * 100
+  const nilaiKehadiran = totalSesi > 0 ? (totalPoinHadir / maksimalPoin) * 100 : 0
 
   const pmb = isNaN(nilaiPembelajaran) ? 0 : Math.round(nilaiPembelajaran)
   const khd = isNaN(nilaiKehadiran) ? 0 : Math.round(nilaiKehadiran)
@@ -153,10 +170,10 @@ const exportKeExcel = () => {
 
   const worksheet = XLSX.utils.json_to_sheet(dataExport)
   const workbook = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Rekap Nilai')
+  XLSX.utils.book_append_sheet(workbook, worksheet, `Semester ${semesterAktif.value}`)
 
   const labelFile = rombelPilihan.value === 'Semua' ? 'Gabungan' : rombelPilihan.value
-  const namaFile = `Rekap_Nilai_${props.kelas.nama_matpel}_Rombel_${labelFile}.xlsx`
+  const namaFile = `Rekap_Nilai_Sem_${semesterAktif.value}_${props.kelas.nama_matpel}_Rombel_${labelFile}.xlsx`
   XLSX.writeFile(workbook, namaFile.replace(/ /g, '_'))
 }
 </script>
@@ -176,6 +193,14 @@ const exportKeExcel = () => {
         </p>
       </div>
       <div class="flex items-center gap-3">
+        <select
+          v-model="semesterAktif"
+          class="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2.5 outline-none cursor-pointer shadow-sm"
+        >
+          <option value="1">Ganjil (Sem 1)</option>
+          <option value="2">Genap (Sem 2)</option>
+        </select>
+
         <button
           @click="bukaPengaturan"
           class="flex items-center gap-2 text-[11px] font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 px-4 py-2.5 rounded-xl transition border border-slate-200 shadow-sm shrink-0"
@@ -231,18 +256,20 @@ const exportKeExcel = () => {
         <thead class="bg-white shadow-sm relative z-30">
           <tr>
             <th
-              class="sticky left-0 top-0 z-40 bg-white border-b border-slate-300 p-4 w-[60px] min-w-[60px] text-center align-middle shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]"
+              rowspan="2"
+              class="sticky left-0 top-0 z-40 bg-white border-b border-r border-slate-200 p-4 w-[60px] text-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]"
             >
-              <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">No.</span>
+              <span class="text-xs font-bold text-slate-500 uppercase">No.</span>
             </th>
             <th
-              class="sticky left-[60px] top-0 z-40 bg-white border-b border-r-4 border-slate-300 p-4 w-[300px] min-w-[300px] text-left align-middle shadow-[6px_0_10px_-4px_rgba(0,0,0,0.08)]"
+              rowspan="2"
+              class="sticky left-[60px] top-0 z-40 bg-white border-b border-r-4 border-slate-300 p-4 w-[240px] text-left shadow-[6px_0_10px_-4px_rgba(0,0,0,0.08)]"
             >
-              <span class="text-xs font-bold text-slate-500 uppercase tracking-wider"
-                >Identitas Siswa</span
-              >
+              <span class="text-xs font-bold text-slate-500 uppercase">Identitas Siswa</span>
             </th>
+
             <th
+              rowspan="2"
               class="sticky top-0 z-30 bg-indigo-50 border-b border-r border-slate-200 p-4 w-[180px] text-center align-middle h-[56px]"
             >
               <p
@@ -255,6 +282,7 @@ const exportKeExcel = () => {
               </p>
             </th>
             <th
+              rowspan="2"
               class="sticky top-0 z-30 bg-emerald-50 border-b border-r border-slate-200 p-4 w-[180px] text-center align-middle h-[56px]"
             >
               <p
@@ -267,6 +295,7 @@ const exportKeExcel = () => {
               </p>
             </th>
             <th
+              rowspan="2"
               class="sticky top-0 z-30 bg-slate-100 border-b border-slate-300 p-4 text-center align-middle h-[56px]"
             >
               <p class="text-xs font-black text-slate-800 uppercase tracking-wider leading-tight">

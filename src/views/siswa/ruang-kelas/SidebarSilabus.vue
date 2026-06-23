@@ -3,15 +3,23 @@ import { computed } from 'vue'
 
 const props = defineProps({
   kelas: Object,
+  materiTerfilter: Array, // Menerima data bab yang sudah difilter per semester dari parent
+  semesterAktif: String, // Menerima string '1' atau '2'
   babTerbuka: Array,
   subBabAktif: Object,
   nisLogin: String,
   tampilSidebarMobile: Boolean,
   tampilSidebarDesktop: Boolean,
-  sedangMembaca: Boolean, // Menerima status timer aktif dari parent
+  sedangMembaca: Boolean,
 })
 
-const emit = defineEmits(['toggle-bab', 'muat-sub-bab', 'keluar-kelas', 'sembunyikan-silabus'])
+const emit = defineEmits([
+  'toggle-bab',
+  'muat-sub-bab',
+  'keluar-kelas',
+  'sembunyikan-silabus',
+  'ganti-semester',
+])
 
 // Mengambil data progres siswa saat ini
 const dataSiswaSaatIni = computed(() => {
@@ -33,11 +41,11 @@ const cekStatusSubBab = (idSub) => {
   return 'belum'
 }
 
-// 1. LOGIKA INTI: Mencari nomor urut indeks global dari sebuah materi (1, 2, 3, dst)
+// LOGIKA INTI: Menggunakan materiTerfilter agar urutan gembok ter-reset setiap pindah semester
 const getUrutanGlobal = (idSub) => {
-  if (!idSub || !props.kelas || !props.kelas.struktur_materi) return -1
+  if (!idSub || !props.materiTerfilter) return -1
   let urutan = 0
-  for (const bab of props.kelas.struktur_materi) {
+  for (const bab of props.materiTerfilter) {
     if (bab.sub_bab) {
       for (const s of bab.sub_bab) {
         urutan++
@@ -48,24 +56,21 @@ const getUrutanGlobal = (idSub) => {
   return -1
 }
 
-// 2. LOGIKA INTI: Menentukan batas urutan maksimal materi yang BOLEH diakses siswa saat ini
 const urutanMaksimalBolehAkses = computed(() => {
-  if (!props.kelas || !props.kelas.struktur_materi) return 1
+  if (!props.materiTerfilter) return 1
 
   let urutan = 0
   let batasMaju = 1
   let ditemukanBatas = false
 
-  for (const bab of props.kelas.struktur_materi) {
+  for (const bab of props.materiTerfilter) {
     if (bab.sub_bab) {
       for (const sub of bab.sub_bab) {
         urutan++
         const status = cekStatusSubBab(sub.id)
 
         if (!ditemukanBatas) {
-          // Selama materi di belakang berstatus selesai/dinilai/menunggu, batas maju terus bertambah
           batasMaju = urutan
-          // Kunci batas atas begitu menemukan materi pertama yang belum dikerjakan atau perlu perbaikan
           if (status === 'belum' || status === 'revisi') {
             ditemukanBatas = true
           }
@@ -76,11 +81,18 @@ const urutanMaksimalBolehAkses = computed(() => {
   return batasMaju
 })
 
+const gantiTabSemester = (sem) => {
+  if (props.sedangMembaca) {
+    if (!confirm('⏳ Waktu baca materi saat ini belum selesai. Yakin ingin berpindah semester?'))
+      return
+  }
+  emit('ganti-semester', sem)
+}
+
 const klikMateri = (sub) => {
   const urutanTujuan = getUrutanGlobal(sub.id)
   const urutanAktif = getUrutanGlobal(props.subBabAktif?.id)
 
-  // VALIDASI 1: Cek apakah tujuan klik melompati batas maju maksimal siswa di database
   if (urutanTujuan > urutanMaksimalBolehAkses.value) {
     alert(
       '🔒 Akses Ditolak: Anda tidak dapat melompati materi! Selesaikan urutan pembelajaran aktif Anda terlebih dahulu.',
@@ -88,17 +100,13 @@ const klikMateri = (sub) => {
     return
   }
 
-  // VALIDASI 2: Proteksi jika siswa mencoba berpindah saat TIMER pengerjaan/waktu baca sedang berjalan
   if (props.sedangMembaca && props.subBabAktif?.id !== sub.id) {
-    // Jika mencoba klik melompat ke depan sebelum menekan tombol selesaikan materi
     if (urutanTujuan > urutanAktif) {
       alert(
         '⏳ Batasan Halaman: Selesaikan sisa batas waktu baca materi saat ini terlebih dahulu sebelum berpindah ke depan!',
       )
       return
-    }
-    // Jika diizinkan kembali ke materi lama di belakang
-    else {
+    } else {
       if (
         !confirm(
           '⏳ Jika Anda kembali melihat materi lama, sisa akumulasi waktu baca materi saat ini akan direset dari awal saat Anda kembali nanti. Lanjutkan?',
@@ -199,6 +207,32 @@ const klikKeluar = () => {
           </div>
         </div>
       </div>
+
+      <!-- TAB FILTER SEMESTER SISWA -->
+      <div class="flex bg-slate-50 p-1 border border-slate-200 rounded-lg mt-2">
+        <button
+          @click="gantiTabSemester('1')"
+          :class="[
+            'flex-1 py-2 text-xs font-bold rounded-md transition-colors',
+            semesterAktif === '1'
+              ? 'bg-white text-emerald-600 shadow-sm border border-slate-100'
+              : 'text-slate-400 hover:text-slate-600',
+          ]"
+        >
+          Ganjil
+        </button>
+        <button
+          @click="gantiTabSemester('2')"
+          :class="[
+            'flex-1 py-2 text-xs font-bold rounded-md transition-colors',
+            semesterAktif === '2'
+              ? 'bg-white text-emerald-600 shadow-sm border border-slate-100'
+              : 'text-slate-400 hover:text-slate-600',
+          ]"
+        >
+          Genap
+        </button>
+      </div>
     </div>
 
     <div class="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-slate-50/50 w-full">
@@ -207,8 +241,15 @@ const klikKeluar = () => {
       </div>
 
       <div
+        v-else-if="!materiTerfilter || materiTerfilter.length === 0"
+        class="text-center text-sm font-bold text-slate-400 py-10"
+      >
+        Belum ada materi di semester ini.
+      </div>
+
+      <div
         v-else
-        v-for="bab in kelas.struktur_materi"
+        v-for="bab in materiTerfilter"
         :key="bab.id"
         class="border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-sm transition-all hover:border-emerald-200"
       >
@@ -255,13 +296,9 @@ const klikKeluar = () => {
                   ? 'bg-rose-50 border-rose-200 shadow-sm'
                   : 'bg-emerald-50 border-emerald-200 shadow-sm'
                 : 'bg-white border-transparent hover:border-slate-200 hover:shadow-sm',
-
-              // REVISI TOTAL: Tampilkan visual gembok abu-abu untuk semua materi yang berada di depan batas maju siswa
               getUrutanGlobal(sub.id) > urutanMaksimalBolehAkses
                 ? 'opacity-60 cursor-not-allowed grayscale'
                 : '',
-
-              // PUDARKAN MATERI DEPAN JIKA SEDANG MEMBACA (Mencegah kabur ke depan saat timer jalan)
               sedangMembaca && getUrutanGlobal(sub.id) > getUrutanGlobal(subBabAktif?.id)
                 ? 'opacity-40 cursor-not-allowed filter grayscale-[50%]'
                 : '',
@@ -271,7 +308,7 @@ const klikKeluar = () => {
               :class="[
                 'w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[10px] font-black shadow-inner border border-white/50 transition-colors',
                 getUrutanGlobal(sub.id) > urutanMaksimalBolehAkses
-                  ? 'bg-slate-200 text-slate-400' // Kunci mati visual lingkaran nomor
+                  ? 'bg-slate-200 text-slate-400'
                   : cekStatusSubBab(sub.id) === 'selesai' || cekStatusSubBab(sub.id) === 'dinilai'
                     ? 'bg-emerald-500 text-white'
                     : cekStatusSubBab(sub.id) === 'revisi'
