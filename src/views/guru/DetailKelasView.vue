@@ -25,6 +25,13 @@ const sedangSetPenanda = ref(false)
 // STATE BARU: Menyimpan status tab semester yang sedang dibuka (Default 1 / Ganjil)
 const semesterAktif = ref('1')
 
+// STATE BARU: Kontrol untuk Sembunyikan/Tampilkan Sidebar Struktur Materi
+const tampilSidebarMateri = ref(true)
+
+const toggleSidebarMateri = () => {
+  tampilSidebarMateri.value = !tampilSidebarMateri.value
+}
+
 // UPDATE: Form Bab sekarang memiliki penampung untuk semester
 const formBab = ref({ id: null, judul: '', semester: '1' })
 
@@ -179,14 +186,20 @@ const customVideoHandler = () => {
   quill.setSelection(insertIndex + 2)
 }
 
+// PERBAIKAN: Menambahkan e.stopPropagation() dan Capture Phase (true) untuk mengatasi double paste text-only
 const handleEditorReady = (quill) => {
-  quill.root.addEventListener('paste', (e) => {
-    e.preventDefault()
-    const text = (e.originalEvent || e).clipboardData.getData('text/plain')
-    const range = quill.getSelection(true)
-    quill.insertText(range.index, text)
-    quill.setSelection(range.index + text.length)
-  })
+  quill.root.addEventListener(
+    'paste',
+    (e) => {
+      e.preventDefault()
+      e.stopPropagation() // Mencegah event dilanjutkan ke fungsi bawaan Quill
+      const text = (e.originalEvent || e).clipboardData.getData('text/plain')
+      const range = quill.getSelection(true) || { index: quill.getLength() }
+      quill.insertText(range.index, text)
+      quill.setSelection(range.index + text.length)
+    },
+    true, // Gunakan capture phase
+  )
 }
 
 const opsiEditor = {
@@ -420,6 +433,24 @@ const batalkanEdit = () => {
         >
           &larr; Kembali
         </button>
+
+        <!-- TAMBAHAN: Tombol Toggle Sidebar -->
+        <button
+          @click="toggleSidebarMateri"
+          class="p-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition"
+          title="Sembunyikan/Tampilkan Struktur Materi"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 6h16M4 12h16M4 18h16"
+            ></path>
+          </svg>
+        </button>
+        <!-- END TAMBAHAN -->
+
         <div>
           <h1 class="text-xl font-black text-gray-800 tracking-tight">
             {{ kelas ? kelas.nama_matpel : 'Memuat Kelas...' }}
@@ -435,8 +466,10 @@ const batalkanEdit = () => {
     </header>
 
     <div v-if="kelas" class="flex flex-col lg:flex-row gap-6 flex-1 min-h-0 p-6">
+      <!-- UPDATE: Tambahkan v-show pada kontainer sidebar materi -->
       <div
-        class="w-full lg:w-[380px] flex flex-col bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden h-full shrink-0"
+        v-show="tampilSidebarMateri"
+        class="w-full lg:w-[380px] flex flex-col bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden h-full shrink-0 transition-all duration-300"
       >
         <div class="p-5 border-b border-gray-100 bg-gray-50 flex flex-col gap-4 shrink-0">
           <h2 class="font-bold text-gray-800 tracking-tight">Struktur Materi</h2>

@@ -582,12 +582,18 @@ export const useGuruStore = defineStore('guru', {
     },
 
     // --- MANAJEMEN STRUKTUR MATERI (BAB) ---
-    async tambahBab(idKelas, namaBab) {
+    async tambahBab(idKelas, namaBab, semester) {
       try {
         const docRef = doc(db, 'kelas', idKelas)
         const docSnap = await getDoc(docRef)
         const struktur = docSnap.data().struktur_materi || []
-        struktur.push({ id: Date.now().toString(), judul: namaBab, sub_bab: [] })
+        // Tambahkan property semester ke dalam objek Bab
+        struktur.push({
+          id: Date.now().toString(),
+          judul: namaBab,
+          semester: semester,
+          sub_bab: [],
+        })
         await updateDoc(docRef, { struktur_materi: struktur })
         return true
       } catch (e) {
@@ -596,7 +602,7 @@ export const useGuruStore = defineStore('guru', {
       }
     },
 
-    async editBab(idKelas, idBab, judulBaru) {
+    async editBab(idKelas, idBab, judulBaru, semesterBaru) {
       try {
         const docRef = doc(db, 'kelas', idKelas)
         const docSnap = await getDoc(docRef)
@@ -604,6 +610,8 @@ export const useGuruStore = defineStore('guru', {
         const index = struktur.findIndex((b) => b.id === idBab)
         if (index !== -1) {
           struktur[index].judul = judulBaru
+          // Update juga semesternya
+          struktur[index].semester = semesterBaru
           await updateDoc(docRef, { struktur_materi: struktur })
         }
         return true
@@ -1631,7 +1639,7 @@ const sapaanWaktu = computed(() => {
 📄 FILE: src/views/guru/DetailKelasView.vue
 ============================================================
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { db } from '../../firebase'
 import { doc, getDoc, updateDoc } from 'firebase/firestore'
@@ -1654,7 +1662,11 @@ const sedangMemproses = ref(false)
 const babTerbuka = ref([])
 const sedangSetPenanda = ref(false)
 
-const formBab = ref({ id: null, judul: '' })
+// STATE BARU: Menyimpan status tab semester yang sedang dibuka (Default 1 / Ganjil)
+const semesterAktif = ref('1')
+
+// UPDATE: Form Bab sekarang memiliki penampung untuk semester
+const formBab = ref({ id: null, judul: '', semester: '1' })
 
 const formSub = ref({
   id: null,
@@ -1673,14 +1685,33 @@ const editorRef = ref(null)
 const dragBabIndex = ref(null)
 const dragSubInfo = ref({ bIndex: null, sIndex: null })
 
+// COMPUTED BARU: Menyaring daftar Bab berdasarkan tab semester yang aktif
+const strukturMateriTerfilter = computed(() => {
+  if (!kelas.value || !kelas.value.struktur_materi) return []
+  return kelas.value.struktur_materi.filter((bab) => {
+    const sem = bab.semester || '1' // Antisipasi untuk data lama yang belum punya property semester
+    return sem === semesterAktif.value
+  })
+})
+
 const onDragStartBab = (bIndex) => {
   dragBabIndex.value = bIndex
 }
+
+// UPDATE: Logika drag drop disesuaikan untuk mencari index asli (karena index UI sudah terfilter)
 const onDropBab = async (targetIndex) => {
   if (dragBabIndex.value === null || dragBabIndex.value === targetIndex) return
+
+  const draggedBab = strukturMateriTerfilter.value[dragBabIndex.value]
+  const targetBab = strukturMateriTerfilter.value[targetIndex]
+
   const struktur = [...kelas.value.struktur_materi]
-  const [item] = struktur.splice(dragBabIndex.value, 1)
-  struktur.splice(targetIndex, 0, item)
+  const origDragIndex = struktur.findIndex((b) => b.id === draggedBab.id)
+  const [item] = struktur.splice(origDragIndex, 1)
+
+  const origTargetIndex = struktur.findIndex((b) => b.id === targetBab.id)
+  struktur.splice(origTargetIndex, 0, item)
+
   kelas.value.struktur_materi = struktur
   await guruStore.updateStrukturMateri(idKelas, struktur)
   dragBabIndex.value = null
@@ -1689,15 +1720,22 @@ const onDropBab = async (targetIndex) => {
 const onDragStartSub = (bIndex, sIndex) => {
   dragSubInfo.value = { bIndex, sIndex }
 }
+
+// UPDATE: Logika drag drop sub-bab disesuaikan dengan ID bab asli
 const onDropSub = async (targetBIndex, targetSIndex) => {
   const source = dragSubInfo.value
   if (source.bIndex === null) return
   if (source.bIndex !== targetBIndex) return alert('Hanya bisa digeser di dalam Bab yang sama.')
   if (source.sIndex === targetSIndex) return
+
+  const targetBabId = strukturMateriTerfilter.value[targetBIndex].id
   const struktur = [...kelas.value.struktur_materi]
-  const bab = struktur[targetBIndex]
+  const babIndex = struktur.findIndex((b) => b.id === targetBabId)
+
+  const bab = struktur[babIndex]
   const [item] = bab.sub_bab.splice(source.sIndex, 1)
   bab.sub_bab.splice(targetSIndex, 0, item)
+
   kelas.value.struktur_materi = struktur
   await guruStore.updateStrukturMateri(idKelas, struktur)
   dragSubInfo.value = { bIndex: null, sIndex: null }
@@ -1755,13 +1793,11 @@ const customImageHandler = () => {
   }
 }
 
-// LOGIKA BARU: Handler Video Kustom untuk layout responsif dan mematikan error Iklan YouTube
 const customVideoHandler = () => {
   const url = prompt('Masukkan Tautan Video (YouTube):')
   if (!url) return
 
   let embedUrl = url
-  // Mengonversi link YouTube standar menjadi link Embed tanpa-cookie
   const ytMatch = url.match(
     /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&?]+)/,
   )
@@ -1779,7 +1815,6 @@ const customVideoHandler = () => {
   const insertIndex = range ? range.index : quill.getLength()
 
   quill.insertEmbed(insertIndex, 'video', embedUrl)
-  // Menambahkan baris kosong setelah video agar kursor tidak nyangkut
   quill.insertText(insertIndex + 1, '\n')
   quill.setSelection(insertIndex + 2)
 }
@@ -1806,7 +1841,7 @@ const opsiEditor = {
       ],
       handlers: {
         image: customImageHandler,
-        video: customVideoHandler, // Mendaftarkan handler video baru
+        video: customVideoHandler,
       },
     },
     clipboard: {
@@ -1866,22 +1901,32 @@ const setPenandaTerakhir = async (idSub) => {
   sedangSetPenanda.value = false
 }
 
+// UPDATE: Reset formBab dengan menempelkan default semester yang sedang aktif
 const siapkanTambahBab = () => {
-  formBab.value = { id: null, judul: '' }
+  formBab.value = { id: null, judul: '', semester: semesterAktif.value }
   modeLayar.value = 'tambah_bab'
 }
+
+// UPDATE: Tangkap semester saat memuat data Bab untuk diedit
 const editBab = (bab) => {
-  formBab.value = { id: bab.id, judul: bab.judul }
+  formBab.value = { id: bab.id, judul: bab.judul, semester: bab.semester || '1' }
   modeLayar.value = 'tambah_bab'
 }
+
+// UPDATE: Kirim parameter semester saat save ke Pinia Store
 const simpanBab = async () => {
   if (!formBab.value.judul) return alert('Nama bab wajib diisi.')
   sedangMemproses.value = true
   let sukses
   if (formBab.value.id) {
-    sukses = await guruStore.editBab(idKelas, formBab.value.id, formBab.value.judul)
+    sukses = await guruStore.editBab(
+      idKelas,
+      formBab.value.id,
+      formBab.value.judul,
+      formBab.value.semester,
+    )
   } else {
-    sukses = await guruStore.tambahBab(idKelas, formBab.value.judul)
+    sukses = await guruStore.tambahBab(idKelas, formBab.value.judul, formBab.value.semester)
   }
   if (sukses) {
     await ambilDataKelas()
@@ -1889,6 +1934,7 @@ const simpanBab = async () => {
   }
   sedangMemproses.value = false
 }
+
 const hapusBab = async (idBab, judul) => {
   if (confirm(`Hapus seluruh Bab "${judul}" beserta isinya?`)) {
     await guruStore.hapusBab(idKelas, idBab)
@@ -2032,23 +2078,46 @@ const batalkanEdit = () => {
       <div
         class="w-full lg:w-[380px] flex flex-col bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden h-full shrink-0"
       >
-        <div
-          class="p-5 border-b border-gray-100 bg-gray-50 flex justify-between items-center shrink-0"
-        >
+        <div class="p-5 border-b border-gray-100 bg-gray-50 flex flex-col gap-4 shrink-0">
           <h2 class="font-bold text-gray-800 tracking-tight">Struktur Materi</h2>
+
+          <div class="flex bg-white p-1 border border-gray-200 rounded-lg">
+            <button
+              @click="semesterAktif = '1'"
+              :class="[
+                'flex-1 py-1.5 text-xs font-bold rounded-md transition-colors',
+                semesterAktif === '1'
+                  ? 'bg-blue-50 text-blue-700 shadow-sm'
+                  : 'text-gray-500 hover:bg-gray-50',
+              ]"
+            >
+              Ganjil (1)
+            </button>
+            <button
+              @click="semesterAktif = '2'"
+              :class="[
+                'flex-1 py-1.5 text-xs font-bold rounded-md transition-colors',
+                semesterAktif === '2'
+                  ? 'bg-blue-50 text-blue-700 shadow-sm'
+                  : 'text-gray-500 hover:bg-gray-50',
+              ]"
+            >
+              Genap (2)
+            </button>
+          </div>
         </div>
 
         <div class="flex-1 overflow-y-auto p-4 space-y-4">
           <div
-            v-if="!kelas.struktur_materi || kelas.struktur_materi.length === 0"
+            v-if="!strukturMateriTerfilter || strukturMateriTerfilter.length === 0"
             class="text-center text-sm text-gray-400 py-4"
           >
-            Belum ada bab yang dibuat.
+            Belum ada bab untuk semester ini.
           </div>
 
           <div
             v-else
-            v-for="(bab, bIndex) in kelas.struktur_materi"
+            v-for="(bab, bIndex) in strukturMateriTerfilter"
             :key="bab.id"
             class="border-l-2 border-gray-200 pl-3 group mb-2"
             draggable="true"
@@ -2355,6 +2424,17 @@ const batalkanEdit = () => {
           <h3 class="text-lg font-bold text-gray-800 mb-6 text-center">
             {{ formBab.id ? 'Edit Bab' : 'Buat Bab Baru' }}
           </h3>
+
+          <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Pilih Semester</label>
+          <select
+            v-model="formBab.semester"
+            class="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm focus:ring-1 focus:ring-blue-500 outline-none mb-4 bg-white"
+          >
+            <option value="1">Semester 1 (Ganjil)</option>
+            <option value="2">Semester 2 (Genap)</option>
+          </select>
+
+          <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Judul Bab</label>
           <input
             type="text"
             v-model="formBab.judul"
@@ -3095,7 +3175,10 @@ const eksekusiSesiAbsensi = async (dataSesi) => {
     const docRef = doc(db, 'kelas', kelasAktifBuka.value.id)
     const pertemuanAsli = kelasAktifBuka.value.pertemuan || []
 
-    const totalSesiRombelIni = pertemuanAsli.filter((p) => p.rombel === dataSesi.rombel).length
+    // Hitung jumlah sesi untuk menentukan kode otomatis (P1, P2, dst) HANYA untuk semester dan rombel yang sama
+    const totalSesiRombelIni = pertemuanAsli.filter(
+      (p) => p.rombel === dataSesi.rombel && (p.semester || '1') === dataSesi.semester,
+    ).length
 
     const tgl = new Date()
     const namaBulan = [
@@ -3117,7 +3200,8 @@ const eksekusiSesiAbsensi = async (dataSesi) => {
     const dataPertemuanBaru = {
       id: dataSesi.id,
       rombel: dataSesi.rombel,
-      kode: `H${totalSesiRombelIni + 1}`,
+      semester: dataSesi.semester, // <--- TAMBAHAN: Simpan Semester
+      kode: `P${totalSesiRombelIni + 1}`, // Menggunakan P (Pertemuan)
       judul: `${tanggalFormat}`,
       pin: dataSesi.pin,
       durasi: dataSesi.durasi,
@@ -3128,6 +3212,23 @@ const eksekusiSesiAbsensi = async (dataSesi) => {
     await updateDoc(docRef, { pertemuan: pertemuanUpdate })
   } catch (error) {
     console.error('Gagal open live session:', error)
+  }
+}
+
+// FUNGSI BARU: Untuk membatalkan sesi saat di layar QR
+const batalkanSesiAbsensi = async (idSesi) => {
+  try {
+    const docRef = doc(db, 'kelas', kelasAktifBuka.value.id)
+    const snap = await getDoc(docRef)
+    if (snap.exists()) {
+      const data = snap.data()
+      // Hapus sesi dari array pertemuan
+      const pertemuanBaru = (data.pertemuan || []).filter((p) => p.id !== idSesi)
+      await updateDoc(docRef, { pertemuan: pertemuanBaru })
+    }
+    tampilModalBukaKelas.value = false // Tutup Modal
+  } catch (error) {
+    console.error('Gagal membatalkan sesi:', error)
   }
 }
 
@@ -3371,6 +3472,7 @@ const simpanRekapAbsensi = async (payload) => {
         @tutup="tampilModalBukaKelas = false"
         @sesi-dibuka="eksekusiSesiAbsensi"
         @simpan-rekap="simpanRekapAbsensi"
+        @batalkan-sesi="batalkanSesiAbsensi"
       />
     </Teleport>
   </div>
@@ -3597,6 +3699,7 @@ const emit = defineEmits(['tutup', 'sesi-dibuka', 'simpan-rekap'])
 // Mode Layar: 'pilih_rombel' | 'qr' | 'resume'
 const modeLayar = ref('pilih_rombel')
 const rombelTerpilih = ref('')
+const semesterSesi = ref('1')
 
 const pinKelas = ref('')
 const qrCodeUrl = ref('')
@@ -3643,7 +3746,16 @@ const konfirmasiPilihanRombel = (rombelName) => {
     pin: pinKelas.value,
     durasi: 15,
     rombel: rombelTerpilih.value,
+    semester: semesterSesi.value,
   })
+}
+
+// FUNGSI BARU: Batalkan di Layar QR
+const klikBatalSesiQR = () => {
+  if (confirm('Batalkan kelas hari ini? Kode QR akan hangus dan data tidak tersimpan.')) {
+    clearInterval(intervalTimer)
+    emit('batalkan-sesi', idSesiAktif.value)
+  }
 }
 
 const generatePIN = () => {
@@ -3738,21 +3850,42 @@ const simpanPermanen = () => {
       <div
         class="w-full max-w-md bg-white rounded-3xl border border-slate-200 p-8 shadow-2xl text-center"
       >
-        <span class="text-4xl block mb-3"></span>
-        <h3 class="text-xl font-black text-slate-800 tracking-tight">Konfirmasi Kelas Mengajar</h3>
+        <span class="text-4xl block mb-3">👨‍🏫</span>
+        <h3 class="text-xl font-black text-slate-800 tracking-tight">Konfirmasi Sesi Kelas</h3>
         <p class="text-sm text-slate-500 mt-2 mb-6">
-          Mata pelajaran ini mengampu lebih dari satu rombel pararel. Rombel manakah yang sedang
-          Anda ajar di jam ini?
+          Pilih Rombel dan Semester untuk sesi pertemuan ini.
         </p>
 
-        <div class="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+        <!-- PILIH SEMESTER -->
+        <div class="flex bg-slate-100 p-1 rounded-xl mb-5 border border-slate-200">
+          <button
+            @click="semesterSesi = '1'"
+            :class="[
+              'flex-1 py-2 text-xs font-bold rounded-lg transition',
+              semesterSesi === '1' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500',
+            ]"
+          >
+            Semester 1 (Ganjil)
+          </button>
+          <button
+            @click="semesterSesi = '2'"
+            :class="[
+              'flex-1 py-2 text-xs font-bold rounded-lg transition',
+              semesterSesi === '2' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500',
+            ]"
+          >
+            Semester 2 (Genap)
+          </button>
+        </div>
+
+        <div class="space-y-2.5 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
           <button
             v-for="rombel in listRombelSaran"
             :key="rombel"
             @click="konfirmasiPilihanRombel(rombel)"
-            class="w-full py-3.5 px-4 border-2 border-slate-100 bg-slate-50 rounded-xl font-black text-slate-700 text-sm hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700 transition"
+            class="w-full py-3 px-4 border-2 border-slate-100 bg-slate-50 rounded-xl font-black text-slate-700 text-sm hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700 transition"
           >
-            {{ rombel }}
+            Mulai Kelas: {{ rombel }}
           </button>
         </div>
 
@@ -3801,13 +3934,21 @@ const simpanPermanen = () => {
             <p class="text-2xl font-black text-slate-800 font-mono">{{ waktuBerjalan }}</p>
           </div>
 
-          <button
-            v-if="modeLayar === 'qr'"
-            @click="lanjutKeResume"
-            class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition shadow-md flex items-center gap-2"
-          >
-            Kunci Akses & Tinjau Rekap &rarr;
-          </button>
+          <div v-if="modeLayar === 'qr'" class="flex gap-2">
+            <!-- TOMBOL BATAL BARU -->
+            <button
+              @click="klikBatalSesiQR"
+              class="bg-rose-50 text-rose-600 hover:bg-rose-100 px-4 py-3 rounded-xl font-bold transition flex items-center gap-2 border border-rose-200"
+            >
+              Batalkan Sesi
+            </button>
+            <button
+              @click="lanjutKeResume"
+              class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold transition shadow-md flex items-center gap-2"
+            >
+              Kunci Akses & Tinjau Rekap &rarr;
+            </button>
+          </div>
 
           <div v-else class="flex gap-3">
             <button
@@ -3964,13 +4105,68 @@ const simpanPermanen = () => {
 ============================================================
 <script setup>
 import { ref, computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { db } from '../../../firebase'
+import { doc, updateDoc } from 'firebase/firestore'
 
 const props = defineProps({
   kelas: { type: Object, required: true },
 })
 
-const rombelPilihan = ref('Semua')
+const route = useRoute()
+const idKelas = route.params.id
 
+// ==========================================
+// STATE FILTER & PENCARIAN BARU
+// ==========================================
+const rombelPilihan = ref('Semua')
+const pencarianSiswa = ref('')
+const semesterAktif = ref('1')
+
+// ==========================================
+// STATE & FUNGSI PENGATURAN FORMULA KEHADIRAN
+// ==========================================
+const tampilModalPengaturan = ref(false)
+const sedangMenyimpan = ref(false)
+const formBobot = ref({ p: 100, s: 100, i: 70, a: 0 })
+
+// STATE BARU: Untuk menyimpan override lokal agar tidak me-mutasi props
+const localPengaturan = ref(null)
+
+const pengaturanKehadiran = computed(() => {
+  return (
+    localPengaturan.value || props.kelas.pengaturan_kehadiran || { p: 100, s: 100, i: 70, a: 0 }
+  )
+})
+
+const bukaPengaturan = () => {
+  formBobot.value = { ...pengaturanKehadiran.value }
+  tampilModalPengaturan.value = true
+}
+
+const simpanPengaturanKehadiran = async () => {
+  sedangMenyimpan.value = true
+  try {
+    formBobot.value.p = Math.min(Math.max(Number(formBobot.value.p) || 0, 0), 100)
+    formBobot.value.s = Math.min(Math.max(Number(formBobot.value.s) || 0, 0), 100)
+    formBobot.value.i = Math.min(Math.max(Number(formBobot.value.i) || 0, 0), 100)
+    formBobot.value.a = Math.min(Math.max(Number(formBobot.value.a) || 0, 0), 100)
+
+    const docRef = doc(db, 'kelas', idKelas)
+    await updateDoc(docRef, { pengaturan_kehadiran: formBobot.value })
+
+    localPengaturan.value = { ...formBobot.value }
+    tampilModalPengaturan.value = false
+  } catch (error) {
+    console.error(error)
+    alert('Gagal menyimpan formula kehadiran.')
+  }
+  sedangMenyimpan.value = false
+}
+
+// ==========================================
+// LOGIKA TABEL & KALKULASI
+// ==========================================
 const daftarRombelUnik = computed(() => {
   if (!props.kelas || !props.kelas.siswa) return []
   const rombelSet = new Set(props.kelas.siswa.map((s) => s.rombel).filter(Boolean))
@@ -3984,43 +4180,52 @@ const siswaTerurut = computed(() => {
   if (rombelPilihan.value !== 'Semua') {
     listSiswa = listSiswa.filter((s) => s.rombel === rombelPilihan.value)
   }
+
+  if (pencarianSiswa.value) {
+    const kataKunci = pencarianSiswa.value.toLowerCase()
+    listSiswa = listSiswa.filter(
+      (s) => s.nama.toLowerCase().includes(kataKunci) || s.nis.toLowerCase().includes(kataKunci),
+    )
+  }
+
   return listSiswa.sort((a, b) => a.nama.localeCompare(b.nama))
 })
 
-// LOGIKA BARU: Penyatuan Kolom (H1, H2, dsb) untuk Mode "Semua Rombel"
 const daftarPertemuan = computed(() => {
   const semuaPertemuan = props.kelas.pertemuan || []
+  const pertemuanSemesterIni = semuaPertemuan.filter(
+    (p) => (p.semester || '1') === semesterAktif.value,
+  )
 
   if (rombelPilihan.value === 'Semua') {
-    // 1. Ambil kode unik saja (H1, H2, H3)
-    const uniqueKodes = [...new Set(semuaPertemuan.map((p) => p.kode))]
-
-    // 2. Urutkan berdasarkan angka di belakang 'H'
+    const uniqueKodes = [...new Set(pertemuanSemesterIni.map((p) => p.kode))]
     uniqueKodes.sort((a, b) => {
-      const numA = parseInt(a.replace('H', '')) || 0
-      const numB = parseInt(b.replace('H', '')) || 0
+      const numA = parseInt(a.replace('H', '').replace('P', '')) || 0
+      const numB = parseInt(b.replace('H', '').replace('P', '')) || 0
       return numA - numB
     })
-
-    // 3. Buat kerangka kolom virtual
     return uniqueKodes.map((kode) => ({
-      id: 'grouped-' + kode, // Penanda ini adalah kolom gabungan
-      kode: kode,
+      id: 'grouped-' + kode,
+      kode: kode.replace('H', 'P'),
       judul: 'Semua Rombel',
     }))
   }
 
-  // Jika memfilter rombel spesifik, tampilkan seperti biasa
-  return semuaPertemuan.filter((p) => p.rombel === rombelPilihan.value)
+  return pertemuanSemesterIni
+    .filter((p) => p.rombel === rombelPilihan.value)
+    .map((p) => ({
+      ...p,
+      kode: p.kode.replace('H', 'P'),
+    }))
 })
 
 const getStatusKehadiran = (siswa, hari) => {
   let idTarget = hari.id
 
-  // Jika sedang mode "Semua Rombel" (kolom gabungan), cari ID sesi asli untuk siswa ini
   if (hari.id.startsWith('grouped-')) {
+    const originalKode = hari.kode.replace('P', 'H')
     const sesiAsliSiswa = props.kelas.pertemuan?.find(
-      (p) => p.rombel === siswa.rombel && p.kode === hari.kode,
+      (p) => p.rombel === siswa.rombel && p.kode === originalKode,
     )
     if (!sesiAsliSiswa) return { kode: '-', kelas: 'bg-slate-100 text-slate-300' }
     idTarget = sesiAsliSiswa.id
@@ -4028,7 +4233,8 @@ const getStatusKehadiran = (siswa, hari) => {
 
   const status = siswa.kehadiran?.[idTarget]
 
-  if (status === 'H') return { kode: 'H', kelas: 'bg-emerald-100 text-emerald-700 font-black' }
+  if (status === 'P' || status === 'H')
+    return { kode: 'P', kelas: 'bg-emerald-100 text-emerald-700 font-black' }
   if (status === 'A') return { kode: 'A', kelas: 'bg-red-100 text-red-700 font-black' }
   if (status === 'S') return { kode: 'S', kelas: 'bg-amber-100 text-amber-700 font-black' }
   if (status === 'I') return { kode: 'I', kelas: 'bg-blue-100 text-blue-700 font-black' }
@@ -4037,17 +4243,27 @@ const getStatusKehadiran = (siswa, hari) => {
 }
 
 const hitungPersentaseHadir = (siswa) => {
-  // Hanya hitung sesi yang DIBUAT KHUSUS untuk rombel siswa tersebut
-  const pertemuanSiswa = (props.kelas.pertemuan || []).filter((p) => p.rombel === siswa.rombel)
-
+  const pertemuanSiswa = (props.kelas.pertemuan || []).filter(
+    (p) => p.rombel === siswa.rombel && (p.semester || '1') === semesterAktif.value,
+  )
   if (pertemuanSiswa.length === 0) return 0
 
-  let hadir = 0
+  let totalPoin = 0
+  const bobot = pengaturanKehadiran.value
+
   pertemuanSiswa.forEach((sesi) => {
-    if (siswa.kehadiran?.[sesi.id] === 'H') hadir++
+    let status = siswa.kehadiran?.[sesi.id]
+    if (status === 'H') status = 'P'
+
+    if (status === 'P') totalPoin += Number(bobot.p)
+    else if (status === 'S') totalPoin += Number(bobot.s)
+    else if (status === 'I') totalPoin += Number(bobot.i)
+    else if (status === 'A') totalPoin += Number(bobot.a)
+    else totalPoin += Number(bobot.a)
   })
 
-  return Math.round((hadir / pertemuanSiswa.length) * 100)
+  const maksimalPoin = pertemuanSiswa.length * 100
+  return Math.round((totalPoin / maksimalPoin) * 100)
 }
 </script>
 
@@ -4055,71 +4271,106 @@ const hitungPersentaseHadir = (siswa) => {
   <div
     class="flex-1 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col h-full overflow-hidden"
   >
+    <!-- HEADER: LEGENDA & TOMBOL PENGATURAN -->
     <div
       class="bg-white border-b border-slate-200 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-[0_4px_10px_-5px_rgba(0,0,0,0.05)] z-20 shrink-0"
     >
-      <div class="flex items-center gap-5">
-        <div
-          class="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider"
-        >
-          <span class="w-3 h-3 rounded-md bg-emerald-400"></span> Hadir (H)
+      <div class="flex flex-col gap-2">
+        <div class="flex items-center gap-5">
+          <div
+            class="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider"
+          >
+            <span class="w-3 h-3 rounded-md bg-emerald-400"></span> Pertemuan (P)
+          </div>
+          <div
+            class="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider"
+          >
+            <span class="w-3 h-3 rounded-md bg-amber-400"></span> Sakit (S)
+          </div>
+          <div
+            class="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider"
+          >
+            <span class="w-3 h-3 rounded-md bg-blue-400"></span> Izin (I)
+          </div>
+          <div
+            class="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider"
+          >
+            <span class="w-3 h-3 rounded-md bg-red-400"></span> Alpa (A)
+          </div>
         </div>
-        <div
-          class="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider"
-        >
-          <span class="w-3 h-3 rounded-md bg-amber-400"></span> Sakit (S)
-        </div>
-        <div
-          class="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider"
-        >
-          <span class="w-3 h-3 rounded-md bg-blue-400"></span> Izin (I)
-        </div>
-        <div
-          class="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider"
-        >
-          <span class="w-3 h-3 rounded-md bg-red-400"></span> Alpa (A)
-        </div>
+        <p class="text-[11px] font-bold text-slate-400">
+          Total Kolom Ditampilkan: {{ daftarPertemuan.length }} Sesi
+        </p>
       </div>
-      <p class="text-[11px] font-bold text-slate-400">
-        Total Kolom Ditampilkan: {{ daftarPertemuan.length }} Sesi
-      </p>
-    </div>
 
-    <div
-      v-if="daftarRombelUnik.length > 1"
-      class="bg-slate-50 border-b border-slate-200 px-4 py-3 shrink-0 flex items-center gap-3 overflow-x-auto custom-scrollbar"
-    >
-      <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0"
-        >Filter Rombel:</span
+      <button
+        @click="bukaPengaturan"
+        class="text-[11px] font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 px-5 py-2.5 rounded-xl transition border border-slate-200 shadow-sm shrink-0"
       >
-      <div class="flex gap-2">
-        <button
-          @click="rombelPilihan = 'Semua'"
-          :class="[
-            'px-4 py-1.5 rounded-full text-xs font-bold transition-all',
-            rombelPilihan === 'Semua'
-              ? 'bg-slate-800 text-white shadow-sm'
-              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100',
-          ]"
-        >
-          Semua Kelas
-        </button>
-        <button
-          v-for="rombel in daftarRombelUnik"
-          :key="rombel"
-          @click="rombelPilihan = rombel"
-          :class="[
-            'px-4 py-1.5 rounded-full text-xs font-bold transition-all',
-            rombelPilihan === rombel
-              ? 'bg-blue-600 text-white shadow-sm'
-              : 'bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600',
-          ]"
-        >
-          {{ rombel }}
-        </button>
-      </div>
+        ⚙️ Atur Poin Presensi
+      </button>
     </div>
 
+    <!-- AREA KONTROL: PENCARIAN & FILTER ROMBEL -->
+    <div
+      class="bg-slate-50 border-b border-slate-200 px-4 py-3 shrink-0 flex flex-col md:flex-row md:items-center justify-between gap-4"
+    >
+      <div class="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
+        <!-- Input Pencarian -->
+        <div class="relative w-full sm:w-64 shrink-0">
+          <input
+            type="text"
+            v-model="pencarianSiswa"
+            placeholder="Cari Siswa..."
+            class="w-full border border-slate-300 rounded-lg text-sm pl-9 pr-3 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-white transition"
+          />
+          <svg
+            class="w-4 h-4 text-slate-400 absolute left-3 top-2"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+            ></path>
+          </svg>
+        </div>
+        <!-- Filter Semester -->
+        <select
+          v-model="semesterAktif"
+          class="border border-slate-300 rounded-lg text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-2 outline-none cursor-pointer"
+        >
+          <option value="1">Ganjil (Sem 1)</option>
+          <option value="2">Genap (Sem 2)</option>
+        </select>
+      </div>
+
+      <!-- Filter Rombel -->
+      <div
+        v-if="daftarRombelUnik.length > 1"
+        class="flex items-center gap-2 w-full md:w-auto overflow-x-auto custom-scrollbar"
+      >
+        <span
+          class="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0 hidden sm:inline-block"
+          >Filter Rombel:</span
+        >
+        <select
+          v-model="rombelPilihan"
+          class="w-full sm:w-auto border border-slate-300 rounded-lg text-xs font-bold text-slate-700 px-3 py-1.5 bg-white outline-none cursor-pointer"
+        >
+          <option value="Semua">Semua Kelas</option>
+          <option v-for="rombel in daftarRombelUnik" :key="rombel" :value="rombel">
+            {{ rombel }}
+          </option>
+        </select>
+      </div>
+    </div>
+    <!-- END AREA KONTROL -->
+
+    <!-- TABEL UTAMA -->
     <div class="flex-1 overflow-auto custom-scrollbar relative bg-slate-50/50">
       <table class="w-full border-collapse border-spacing-0 bg-white min-w-max">
         <thead class="bg-white shadow-sm relative z-30">
@@ -4186,8 +4437,9 @@ const hitungPersentaseHadir = (siswa) => {
                   'text-sm font-bold',
                   hitungPersentaseHadir(siswa) > 0 ? 'text-emerald-700' : 'text-slate-400',
                 ]"
-                >{{ hitungPersentaseHadir(siswa) }}%</span
               >
+                {{ hitungPersentaseHadir(siswa) }}%
+              </span>
             </td>
             <td
               v-for="hari in daftarPertemuan"
@@ -4205,16 +4457,115 @@ const hitungPersentaseHadir = (siswa) => {
             </td>
           </tr>
           <tr v-if="siswaTerurut.length === 0">
-            <td colspan="4" class="p-16 text-center text-slate-400 bg-white">
+            <td
+              :colspan="3 + daftarPertemuan.length"
+              class="p-16 text-center text-slate-400 bg-white"
+            >
               <span class="text-4xl block mb-3 opacity-50">📭</span>
-              <p class="font-bold text-lg text-slate-500">
-                Tidak ada riwayat presensi yang terekam.
-              </p>
+              <p class="font-bold text-lg text-slate-500">Siswa tidak ditemukan.</p>
             </td>
           </tr>
         </tbody>
       </table>
     </div>
+    <!-- END TABEL UTAMA -->
+
+    <!-- MODAL PENGATURAN POIN PRESENSI -->
+    <Teleport to="body">
+      <div
+        v-if="tampilModalPengaturan"
+        class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9998] flex items-center justify-center p-4 transition-opacity"
+      >
+        <div
+          class="bg-white rounded-2xl shadow-2xl w-full max-w-sm border border-slate-200 overflow-hidden"
+        >
+          <div
+            class="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center"
+          >
+            <div>
+              <h3 class="font-bold text-slate-800">Poin Status Presensi</h3>
+              <p class="text-[10px] text-slate-500 mt-0.5">
+                Tentukan nilai persentase untuk tiap status
+              </p>
+            </div>
+            <button
+              @click="tampilModalPengaturan = false"
+              class="text-slate-400 hover:text-slate-600 text-xl"
+            >
+              &times;
+            </button>
+          </div>
+          <div class="p-6 space-y-4">
+            <div class="flex items-center justify-between gap-4">
+              <label class="text-sm font-bold text-emerald-700 flex-1">Pertemuan (P)</label>
+              <div class="flex items-center gap-2 w-24">
+                <input
+                  type="number"
+                  v-model="formBobot.p"
+                  class="w-full border border-slate-300 rounded-lg px-3 py-2 text-center text-sm font-bold focus:border-emerald-500 outline-none"
+                />
+                <span class="text-slate-400 font-bold">%</span>
+              </div>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <label class="text-sm font-bold text-amber-700 flex-1">Sakit (S)</label>
+              <div class="flex items-center gap-2 w-24">
+                <input
+                  type="number"
+                  v-model="formBobot.s"
+                  class="w-full border border-slate-300 rounded-lg px-3 py-2 text-center text-sm font-bold focus:border-amber-500 outline-none"
+                />
+                <span class="text-slate-400 font-bold">%</span>
+              </div>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <label class="text-sm font-bold text-blue-700 flex-1">Izin (I)</label>
+              <div class="flex items-center gap-2 w-24">
+                <input
+                  type="number"
+                  v-model="formBobot.i"
+                  class="w-full border border-slate-300 rounded-lg px-3 py-2 text-center text-sm font-bold focus:border-blue-500 outline-none"
+                />
+                <span class="text-slate-400 font-bold">%</span>
+              </div>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <label class="text-sm font-bold text-red-700 flex-1">Alpa (A)</label>
+              <div class="flex items-center gap-2 w-24">
+                <input
+                  type="number"
+                  v-model="formBobot.a"
+                  class="w-full border border-slate-300 rounded-lg px-3 py-2 text-center text-sm font-bold focus:border-red-500 outline-none"
+                />
+                <span class="text-slate-400 font-bold">%</span>
+              </div>
+            </div>
+            <div
+              class="bg-slate-50 p-3 rounded-lg border border-slate-100 text-[10px] text-slate-500 font-medium mt-2 leading-relaxed"
+            >
+              *Jika siswa sakit dengan surat, Anda dapat menyetel poinnya menjadi 100% agar nilai
+              kehadirannya tidak berkurang.
+            </div>
+          </div>
+          <div class="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
+            <button
+              @click="tampilModalPengaturan = false"
+              class="px-5 py-2 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-100 transition"
+            >
+              Batal
+            </button>
+            <button
+              @click="simpanPengaturanKehadiran"
+              :disabled="sedangMenyimpan"
+              class="px-5 py-2 text-sm font-bold text-white bg-blue-600 rounded-xl hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+            >
+              Simpan
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    <!-- END MODAL PENGATURAN -->
   </div>
 </template>
 
@@ -4271,8 +4622,23 @@ const tabTugasAktif = ref('pdf')
 const modeRevisi = ref(false)
 const formRevisi = ref({ catatan: '', batasWaktu: '' })
 
-// Filter Rombel Aktif
+// ==========================================
+// STATE FILTER & PENCARIAN BARU
+// ==========================================
 const rombelPilihan = ref('Semua')
+const pencarianSiswa = ref('')
+const filterTipe = ref('Semua') // 'Semua', 'materi', 'tugas', 'kuis'
+const semesterAktif = ref('1')
+const babDilipat = ref([]) // Menyimpan ID Bab yang sedang diminimize
+
+const toggleLipatBab = (idBab) => {
+  const index = babDilipat.value.indexOf(idBab)
+  if (index === -1) {
+    babDilipat.value.push(idBab)
+  } else {
+    babDilipat.value.splice(index, 1)
+  }
+}
 
 const daftarRombelUnik = computed(() => {
   if (!props.kelas || !props.kelas.siswa) return []
@@ -4287,6 +4653,14 @@ const siswaTerurut = computed(() => {
   if (rombelPilihan.value !== 'Semua') {
     listSiswa = listSiswa.filter((s) => s.rombel === rombelPilihan.value)
   }
+
+  if (pencarianSiswa.value) {
+    const kataKunci = pencarianSiswa.value.toLowerCase()
+    listSiswa = listSiswa.filter(
+      (s) => s.nama.toLowerCase().includes(kataKunci) || s.nis.toLowerCase().includes(kataKunci),
+    )
+  }
+
   return listSiswa.sort((a, b) => a.nama.localeCompare(b.nama))
 })
 
@@ -4294,7 +4668,68 @@ const formulaRapor = computed(() => {
   return props.kelas.pengaturan_rapor || { materi: 20, tugas: 30, kuis: 50 }
 })
 
-const daftarKolomKegiatan = computed(() => {
+// ==========================================
+// LOGIKA RENDER KOLOM TABEL DINAMIS
+// ==========================================
+const strukturTabel = computed(() => {
+  if (!props.kelas || !props.kelas.struktur_materi) return { headerBab: [], kolomAktif: [] }
+
+  const headerBab = []
+  const kolomAktif = []
+
+  let urutanMateri = 1,
+    urutanTugas = 1,
+    urutanKuis = 1
+
+  props.kelas.struktur_materi.forEach((bab) => {
+    const sem = bab.semester || '1'
+    if (sem !== semesterAktif.value) return
+
+    const isDilipat = babDilipat.value.includes(bab.id)
+
+    let subTerfilter = []
+    if (bab.sub_bab) {
+      subTerfilter = bab.sub_bab.filter(
+        (sub) => filterTipe.value === 'Semua' || sub.tipe === filterTipe.value,
+      )
+    }
+
+    if (subTerfilter.length === 0) return
+
+    if (isDilipat) {
+      const dummyKolom = {
+        id: `dummy-${bab.id}`,
+        tipe: 'dummy',
+        bab_judul: bab.judul,
+        isDummy: true,
+      }
+      kolomAktif.push(dummyKolom)
+      headerBab.push({ id: bab.id, judul: bab.judul, colspan: 1, isDilipat: true })
+    } else {
+      const kolomUntukBabIni = []
+      subTerfilter.forEach((sub) => {
+        let kodeUnik = ''
+        if (sub.tipe === 'materi') kodeUnik = 'M' + urutanMateri++
+        else if (sub.tipe === 'tugas') kodeUnik = 'T' + urutanTugas++
+        else if (sub.tipe === 'kuis') kodeUnik = 'K' + urutanKuis++
+
+        const colObj = { ...sub, bab_judul: bab.judul, kode: kodeUnik, isDummy: false }
+        kolomUntukBabIni.push(colObj)
+        kolomAktif.push(colObj)
+      })
+      headerBab.push({
+        id: bab.id,
+        judul: bab.judul,
+        colspan: kolomUntukBabIni.length,
+        isDilipat: false,
+      })
+    }
+  })
+
+  return { headerBab, kolomAktif }
+})
+
+const daftarSemuaKegiatan = computed(() => {
   if (!props.kelas || !props.kelas.struktur_materi) return []
   const kolom = []
   let urutanMateri = 1,
@@ -4302,6 +4737,7 @@ const daftarKolomKegiatan = computed(() => {
     urutanKuis = 1
 
   props.kelas.struktur_materi.forEach((bab) => {
+    if ((bab.semester || '1') !== semesterAktif.value) return
     if (bab.sub_bab) {
       bab.sub_bab.forEach((sub) => {
         let kodeUnik = ''
@@ -4358,17 +4794,13 @@ const getStatusKeterlambatanTabel = (siswa, kegiatan) => {
   if (kegiatan.tipe === 'materi') return null
 
   const waktuKumpul = siswa.waktu_kumpul?.[kegiatan.id]
-  // PERBAIKAN: Sintaks IF yang rusak sudah diperbaiki
   if (!waktuKumpul) return null
-
   if (!kegiatan.deadline) return { status: 'tepat', teks: 'TEPAT' }
 
   const dtKumpul = new Date(waktuKumpul)
   const dtBatas = new Date(kegiatan.deadline)
 
-  if (dtKumpul > dtBatas) {
-    return { status: 'telat', teks: 'TELAT' }
-  }
+  if (dtKumpul > dtBatas) return { status: 'telat', teks: 'TELAT' }
   return { status: 'tepat', teks: 'TEPAT' }
 }
 
@@ -4400,7 +4832,6 @@ const bukaKoreksi = (siswa, kegiatan) => {
   const nilaiSekarang = siswa.nilai_pembelajaran?.[kegiatan.id]
   nilaiInput.value =
     nilaiSekarang && nilaiSekarang !== 'menunggu' && nilaiSekarang !== 'revisi' ? nilaiSekarang : ''
-
   modeRevisi.value = false
   formRevisi.value = { catatan: '', batasWaktu: '' }
   tampilPanelKoreksi.value = true
@@ -4437,7 +4868,6 @@ const simpanPenilaian = async () => {
 
       const docRef = doc(db, 'kelas', idKelas)
       await updateDoc(docRef, { siswa: listSiswaBaru })
-
       emit('update-siswa', listSiswaBaru)
       tutupKoreksi()
     }
@@ -4471,7 +4901,6 @@ const simpanPermintaanRevisi = async () => {
 
       const docRef = doc(db, 'kelas', idKelas)
       await updateDoc(docRef, { siswa: listSiswaBaru })
-
       emit('update-siswa', listSiswaBaru)
       tutupKoreksi()
     }
@@ -4488,13 +4917,13 @@ const triggerBukaPengaturan = () => {
 
 const hitungKetercapaianSiswa = (siswa) => {
   let totalMateri = 0,
-    selesaiMateri = 0,
-    totalNilaiTugas = 0,
-    countTugas = 0,
-    totalNilaiKuis = 0,
+    selesaiMateri = 0
+  let totalNilaiTugas = 0,
+    countTugas = 0
+  let totalNilaiKuis = 0,
     countKuis = 0
 
-  daftarKolomKegiatan.value.forEach((kegiatan) => {
+  daftarSemuaKegiatan.value.forEach((kegiatan) => {
     const progres = siswa.progres_belajar?.[kegiatan.id]
     const nilai = siswa.nilai_pembelajaran?.[kegiatan.id]
 
@@ -4523,14 +4952,12 @@ const hitungKetercapaianSiswa = (siswa) => {
   const bKuis = formulaRapor.value.kuis / 100
 
   const nilaiAkhir = capaianMateri * bMateri + rataTugas * bTugas + rataKuis * bKuis
-
   return { capaian: Math.round(capaianMateri), akhir: Math.round(nilaiAkhir) }
 }
 
 const pratinjauTugas = computed(() => {
-  if (!dataKoreksi.value || !dataKoreksi.value.url_file) {
+  if (!dataKoreksi.value || !dataKoreksi.value.url_file)
     return { tipe: 'none', url: '', rawUrl: '' }
-  }
 
   const rawUrl =
     typeof dataKoreksi.value.url_file === 'object'
@@ -4559,10 +4986,8 @@ const pratinjauTugas = computed(() => {
 
 const statusKeterlambatan = computed(() => {
   if (!dataKoreksi.value || dataKoreksi.value.tipe === 'materi') return null
-
-  if (!dataKoreksi.value.waktu_kumpul) {
+  if (!dataKoreksi.value.waktu_kumpul)
     return { teks: 'Waktu Tidak Terekam', terlambat: false, detail: '-' }
-  }
 
   const waktuKumpul = new Date(dataKoreksi.value.waktu_kumpul)
   const detailKumpul = waktuKumpul.toLocaleString('id-ID', {
@@ -4572,12 +4997,10 @@ const statusKeterlambatan = computed(() => {
     minute: '2-digit',
   })
 
-  if (!dataKoreksi.value.deadline) {
+  if (!dataKoreksi.value.deadline)
     return { teks: 'Tepat Waktu', terlambat: false, detail: detailKumpul }
-  }
 
   const batasDeadline = new Date(dataKoreksi.value.deadline)
-
   if (waktuKumpul > batasDeadline) {
     const selisihMs = waktuKumpul - batasDeadline
     const selisihMenit = Math.floor(selisihMs / 60000)
@@ -4591,7 +5014,6 @@ const statusKeterlambatan = computed(() => {
 
     return { teks: `Terlambat ${teksKeterlambatan}`, terlambat: true, detail: detailKumpul }
   }
-
   return { teks: 'Tepat Waktu', terlambat: false, detail: detailKumpul }
 })
 </script>
@@ -4600,6 +5022,7 @@ const statusKeterlambatan = computed(() => {
   <div
     class="flex-1 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col h-full overflow-hidden"
   >
+    <!-- HEADER: LEGENDA & TOMBOL FORMULA -->
     <div
       class="bg-white border-b border-slate-200 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-[0_4px_10px_-5px_rgba(0,0,0,0.05)] z-20 shrink-0"
     >
@@ -4649,41 +5072,117 @@ const statusKeterlambatan = computed(() => {
       </button>
     </div>
 
+    <!-- AREA KONTROL: PENCARIAN & FILTER TABEL -->
     <div
-      v-if="daftarRombelUnik.length > 1"
-      class="bg-slate-50 border-b border-slate-200 px-4 py-3 shrink-0 flex items-center gap-3 overflow-x-auto custom-scrollbar"
+      class="bg-slate-50 border-b border-slate-200 px-4 py-3 shrink-0 flex flex-col md:flex-row md:items-center justify-between gap-4"
     >
-      <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0"
-        >Filter Rombel:</span
+      <div class="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
+        <!-- Input Pencarian -->
+        <div class="relative w-full sm:w-60 shrink-0">
+          <input
+            type="text"
+            v-model="pencarianSiswa"
+            placeholder="Cari Siswa..."
+            class="w-full border border-slate-300 rounded-lg text-sm pl-9 pr-3 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-white transition"
+          />
+          <svg
+            class="w-4 h-4 text-slate-400 absolute left-3 top-2"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+            ></path>
+          </svg>
+        </div>
+
+        <!-- Filter Semester -->
+        <select
+          v-model="semesterAktif"
+          class="border border-slate-300 rounded-lg text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-2 outline-none cursor-pointer"
+        >
+          <option value="1">Ganjil (Sem 1)</option>
+          <option value="2">Genap (Sem 2)</option>
+        </select>
+
+        <div class="hidden sm:block w-px h-6 bg-slate-200"></div>
+
+        <!-- Filter Tipe Kolom -->
+        <div class="flex gap-1.5 overflow-x-auto custom-scrollbar pb-1 sm:pb-0">
+          <button
+            @click="filterTipe = 'Semua'"
+            :class="[
+              'px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap',
+              filterTipe === 'Semua'
+                ? 'bg-slate-800 text-white shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100',
+            ]"
+          >
+            Semua Kolom
+          </button>
+          <button
+            @click="filterTipe = 'materi'"
+            :class="[
+              'px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap',
+              filterTipe === 'materi'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600',
+            ]"
+          >
+            Materi Saja
+          </button>
+          <button
+            @click="filterTipe = 'tugas'"
+            :class="[
+              'px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap',
+              filterTipe === 'tugas'
+                ? 'bg-amber-500 text-white shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-amber-50 hover:text-amber-600',
+            ]"
+          >
+            Tugas Saja
+          </button>
+          <button
+            @click="filterTipe = 'kuis'"
+            :class="[
+              'px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap',
+              filterTipe === 'kuis'
+                ? 'bg-purple-600 text-white shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-purple-50 hover:text-purple-600',
+            ]"
+          >
+            Kuis Saja
+          </button>
+        </div>
+      </div>
+
+      <!-- Filter Rombel -->
+      <div
+        v-if="daftarRombelUnik.length > 1"
+        class="flex items-center gap-2 w-full md:w-auto overflow-x-auto custom-scrollbar"
       >
-      <div class="flex gap-2">
-        <button
-          @click="rombelPilihan = 'Semua'"
-          :class="[
-            'px-4 py-1.5 rounded-full text-xs font-bold transition-all',
-            rombelPilihan === 'Semua'
-              ? 'bg-slate-800 text-white shadow-sm'
-              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100',
-          ]"
+        <span
+          class="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0 hidden sm:inline-block"
+          >Rombel:</span
         >
-          Semua Kelas
-        </button>
-        <button
-          v-for="rombel in daftarRombelUnik"
-          :key="rombel"
-          @click="rombelPilihan = rombel"
-          :class="[
-            'px-4 py-1.5 rounded-full text-xs font-bold transition-all',
-            rombelPilihan === rombel
-              ? 'bg-blue-600 text-white shadow-sm'
-              : 'bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600',
-          ]"
+        <select
+          v-model="rombelPilihan"
+          class="w-full sm:w-auto border border-slate-300 rounded-lg text-xs font-bold text-slate-700 px-3 py-1.5 bg-white outline-none cursor-pointer"
         >
-          {{ rombel }}
-        </button>
+          <option value="Semua">Semua Kelas</option>
+          <option v-for="rombel in daftarRombelUnik" :key="rombel" :value="rombel">
+            {{ rombel }}
+          </option>
+        </select>
       </div>
     </div>
+    <!-- END AREA KONTROL -->
 
+    <!-- TABEL UTAMA -->
     <div class="flex-1 overflow-auto custom-scrollbar relative bg-slate-50/50">
       <table class="w-full min-w-max border-collapse border-spacing-0 bg-white">
         <thead class="bg-white shadow-sm relative z-30">
@@ -4712,29 +5211,45 @@ const statusKeterlambatan = computed(() => {
             >
               <p class="text-[10px] font-bold text-slate-700 uppercase">Nilai<br />Pembelajaran</p>
             </th>
-            <template v-for="bab in props.kelas.struktur_materi" :key="'bab-' + bab.id">
+
+            <template v-for="bab in strukturTabel.headerBab" :key="'bab-' + bab.id">
               <th
-                v-if="bab.sub_bab && bab.sub_bab.length > 0"
-                :colspan="bab.sub_bab.length"
-                class="sticky top-0 z-30 bg-slate-50 border-b border-r border-slate-200 p-2 text-center h-[44px]"
+                :colspan="bab.colspan"
+                class="sticky top-0 z-30 bg-slate-50 border-b border-r border-slate-200 p-1.5 text-center h-[44px]"
               >
-                <p
-                  class="text-[11px] font-bold text-slate-600 truncate max-w-[200px] mx-auto px-2"
-                  :title="bab.judul"
-                >
-                  {{ bab.judul }}
-                </p>
+                <div class="flex items-center justify-center gap-1.5 px-1 group/btn">
+                  <p
+                    :class="[
+                      'text-[11px] font-bold truncate max-w-[200px]',
+                      bab.isDilipat ? 'text-slate-400 italic' : 'text-slate-600',
+                    ]"
+                    :title="bab.judul"
+                  >
+                    {{ bab.judul }}
+                  </p>
+                  <button
+                    @click="toggleLipatBab(bab.id)"
+                    class="text-[10px] w-5 h-5 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center hover:bg-blue-100 hover:text-blue-600 transition-colors focus:outline-none opacity-50 group-hover/btn:opacity-100"
+                    title="Lipat/Buka Bab"
+                  >
+                    <span v-if="bab.isDilipat">➕</span>
+                    <span v-else>➖</span>
+                  </button>
+                </div>
               </th>
             </template>
           </tr>
           <tr>
             <th
-              v-for="kegiatan in daftarKolomKegiatan"
-              :key="kegiatan.id"
-              class="sticky top-[44px] z-30 bg-white border-b border-r border-slate-200 px-2 py-2 min-w-[100px] text-center hover:bg-slate-50 transition cursor-help"
-              :title="kegiatan.judul"
+              v-for="(kegiatan, index) in strukturTabel.kolomAktif"
+              :key="kegiatan.isDummy ? kegiatan.id : `${kegiatan.id}-${index}`"
+              class="sticky top-[44px] z-30 border-b border-r border-slate-200 px-2 py-2 min-w-[70px] text-center transition"
+              :class="kegiatan.isDummy ? 'bg-slate-100' : 'bg-white hover:bg-slate-50 cursor-help'"
+              :title="kegiatan.isDummy ? 'Bab Dilipat' : kegiatan.judul"
             >
+              <span v-if="kegiatan.isDummy" class="text-[10px] text-slate-400 italic">...</span>
               <span
+                v-else
                 :class="[
                   'inline-block text-[11px] rounded-sm font-black',
                   kegiatan.tipe === 'kuis'
@@ -4783,12 +5298,21 @@ const statusKeterlambatan = computed(() => {
                 hitungKetercapaianSiswa(siswa).akhir
               }}</span>
             </td>
+
             <td
-              v-for="kegiatan in daftarKolomKegiatan"
-              :key="`${siswa.nis}-${kegiatan.id}`"
+              v-for="(kegiatan, index) in strukturTabel.kolomAktif"
+              :key="
+                kegiatan.isDummy
+                  ? `${siswa.nis}-${kegiatan.id}`
+                  : `${siswa.nis}-${kegiatan.id}-${index}`
+              "
               class="border-b border-r border-slate-100 p-2 text-center"
+              :class="kegiatan.isDummy ? 'bg-slate-50/30' : ''"
             >
-              <div class="flex items-center justify-center gap-2">
+              <div v-if="kegiatan.isDummy" class="text-slate-300 text-[10px] italic opacity-50">
+                ...
+              </div>
+              <div v-else class="flex items-center justify-center gap-2">
                 <span
                   v-if="getStatusKeterlambatanTabel(siswa, kegiatan)"
                   :class="[
@@ -4812,10 +5336,21 @@ const statusKeterlambatan = computed(() => {
               </div>
             </td>
           </tr>
+          <tr v-if="siswaTerurut.length === 0">
+            <td
+              :colspan="4 + strukturTabel.kolomAktif.length"
+              class="p-16 text-center text-slate-400 bg-white"
+            >
+              <span class="text-4xl block mb-3 opacity-50">📭</span>
+              <p class="font-bold text-lg text-slate-500">Tidak ada siswa yang sesuai kriteria.</p>
+            </td>
+          </tr>
         </tbody>
       </table>
     </div>
+    <!-- END TABEL UTAMA -->
 
+    <!-- PANEL KOREKSI (SIDEBAR) -->
     <Teleport to="body">
       <div
         v-if="tampilPanelKoreksi"
@@ -4829,6 +5364,7 @@ const statusKeterlambatan = computed(() => {
         ]"
       >
         <div v-if="dataKoreksi" class="flex flex-col h-full">
+          <!-- Header Panel -->
           <div
             class="px-8 py-6 border-b border-slate-100 flex justify-between items-center shrink-0 bg-white"
           >
@@ -4844,7 +5380,9 @@ const statusKeterlambatan = computed(() => {
             </button>
           </div>
 
+          <!-- Body Panel -->
           <div class="flex-1 overflow-y-auto p-8 space-y-8 bg-slate-50/50">
+            <!-- Info Siswa -->
             <div
               class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-start gap-5"
             >
@@ -4882,6 +5420,7 @@ const statusKeterlambatan = computed(() => {
               </div>
             </div>
 
+            <!-- Pratinjau Tugas -->
             <div
               v-if="dataKoreksi.tipe === 'tugas'"
               class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden h-[450px] flex flex-col"
@@ -4971,6 +5510,7 @@ const statusKeterlambatan = computed(() => {
               </template>
             </div>
 
+            <!-- Lembar Jawaban Kuis -->
             <div
               v-if="dataKoreksi.tipe === 'kuis'"
               class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden h-[450px] flex flex-col"
@@ -5063,6 +5603,7 @@ const statusKeterlambatan = computed(() => {
               </div>
             </div>
 
+            <!-- Materi: Tandai Selesai -->
             <div v-if="dataKoreksi.tipe === 'materi'">
               <div
                 v-if="dataKoreksi.status_saat_ini === 'selesai'"
@@ -5092,6 +5633,7 @@ const statusKeterlambatan = computed(() => {
               </div>
             </div>
 
+            <!-- Form Penilaian / Revisi -->
             <div
               v-if="dataKoreksi.tipe !== 'materi'"
               class="bg-slate-100 p-6 rounded-2xl border border-slate-200 shadow-inner max-w-sm mx-auto flex flex-col gap-4"
@@ -5177,9 +5719,11 @@ const statusKeterlambatan = computed(() => {
               </template>
             </div>
           </div>
+          <!-- END Body Panel -->
         </div>
       </div>
     </Teleport>
+    <!-- END PANEL KOREKSI -->
   </div>
 </template>
 
@@ -5228,9 +5772,15 @@ const emit = defineEmits(['update-bobot-rekap'])
 const route = useRoute()
 
 const rombelPilihan = ref('Semua')
+const semesterAktif = ref('1')
 
 const bobotRekap = computed(() => {
   return props.kelas.bobot_rekap || { pembelajaran: 70, kehadiran: 30 }
+})
+
+// MENGAMBIL PENGATURAN POIN KEHADIRAN (H, S, I, A) DARI DATABASE
+const pengaturanKehadiran = computed(() => {
+  return props.kelas.pengaturan_kehadiran || { p: 100, s: 100, i: 70, a: 0 }
 })
 
 const tampilModalBobot = ref(false)
@@ -5279,7 +5829,8 @@ const daftarKolomKegiatan = computed(() => {
   if (!props.kelas || !props.kelas.struktur_materi) return []
   const kolom = []
   props.kelas.struktur_materi.forEach((bab) => {
-    if (bab.sub_bab) {
+    const sem = bab.semester || '1'
+    if (sem === semesterAktif.value && bab.sub_bab) {
       bab.sub_bab.forEach((sub) => kolom.push(sub))
     }
   })
@@ -5288,10 +5839,10 @@ const daftarKolomKegiatan = computed(() => {
 
 const dapatkanKalkulasiSiswa = (siswa) => {
   let totalMateri = 0,
-    selesaiMateri = 0,
-    totalNilaiTugas = 0,
-    countTugas = 0,
-    totalNilaiKuis = 0,
+    selesaiMateri = 0
+  let totalNilaiTugas = 0,
+    countTugas = 0
+  let totalNilaiKuis = 0,
     countKuis = 0
 
   daftarKolomKegiatan.value.forEach((kegiatan) => {
@@ -5324,19 +5875,29 @@ const dapatkanKalkulasiSiswa = (siswa) => {
     rataTugas * (formulaRapor.tugas / 100) +
     rataKuis * (formulaRapor.kuis / 100)
 
-  // LOGIKA BARU: Hitung Kehadiran Berdasarkan Rombel Siswa Sendiri
-  let totalHadir = 0
+  // LOGIKA BARU: Hitung Kehadiran Berdasarkan Formula Pengaturan Poin (H/P, S, I, A)
+  let totalPoinHadir = 0
   const pertemuanKhususRombelIni = (props.kelas.pertemuan || []).filter(
-    (p) => p.rombel === siswa.rombel,
+    (p) => p.rombel === siswa.rombel && (p.semester || '1') === semesterAktif.value, // <--- TAMBAHKAN FILTER INI
   )
   const totalSesi = pertemuanKhususRombelIni.length
+  const bobotHadir = pengaturanKehadiran.value
 
   if (totalSesi > 0) {
     pertemuanKhususRombelIni.forEach((sesi) => {
-      if (siswa.kehadiran?.[sesi.id] === 'H') totalHadir++
+      let status = siswa.kehadiran?.[sesi.id]
+      if (status === 'H') status = 'P' // Backward Compatibility
+
+      if (status === 'P') totalPoinHadir += Number(bobotHadir.p)
+      else if (status === 'S') totalPoinHadir += Number(bobotHadir.s)
+      else if (status === 'I') totalPoinHadir += Number(bobotHadir.i)
+      else if (status === 'A') totalPoinHadir += Number(bobotHadir.a)
+      else totalPoinHadir += Number(bobotHadir.a)
     })
   }
-  const nilaiKehadiran = totalSesi > 0 ? (totalHadir / totalSesi) * 100 : 0
+
+  const maksimalPoin = totalSesi * 100
+  const nilaiKehadiran = totalSesi > 0 ? (totalPoinHadir / maksimalPoin) * 100 : 0
 
   const pmb = isNaN(nilaiPembelajaran) ? 0 : Math.round(nilaiPembelajaran)
   const khd = isNaN(nilaiKehadiran) ? 0 : Math.round(nilaiKehadiran)
@@ -5368,10 +5929,10 @@ const exportKeExcel = () => {
 
   const worksheet = XLSX.utils.json_to_sheet(dataExport)
   const workbook = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Rekap Nilai')
+  XLSX.utils.book_append_sheet(workbook, worksheet, `Semester ${semesterAktif.value}`)
 
   const labelFile = rombelPilihan.value === 'Semua' ? 'Gabungan' : rombelPilihan.value
-  const namaFile = `Rekap_Nilai_${props.kelas.nama_matpel}_Rombel_${labelFile}.xlsx`
+  const namaFile = `Rekap_Nilai_Sem_${semesterAktif.value}_${props.kelas.nama_matpel}_Rombel_${labelFile}.xlsx`
   XLSX.writeFile(workbook, namaFile.replace(/ /g, '_'))
 }
 </script>
@@ -5391,6 +5952,14 @@ const exportKeExcel = () => {
         </p>
       </div>
       <div class="flex items-center gap-3">
+        <select
+          v-model="semesterAktif"
+          class="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2.5 outline-none cursor-pointer shadow-sm"
+        >
+          <option value="1">Ganjil (Sem 1)</option>
+          <option value="2">Genap (Sem 2)</option>
+        </select>
+
         <button
           @click="bukaPengaturan"
           class="flex items-center gap-2 text-[11px] font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 px-4 py-2.5 rounded-xl transition border border-slate-200 shadow-sm shrink-0"
@@ -5446,18 +6015,20 @@ const exportKeExcel = () => {
         <thead class="bg-white shadow-sm relative z-30">
           <tr>
             <th
-              class="sticky left-0 top-0 z-40 bg-white border-b border-slate-300 p-4 w-[60px] min-w-[60px] text-center align-middle shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]"
+              rowspan="2"
+              class="sticky left-0 top-0 z-40 bg-white border-b border-r border-slate-200 p-4 w-[60px] text-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]"
             >
-              <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">No.</span>
+              <span class="text-xs font-bold text-slate-500 uppercase">No.</span>
             </th>
             <th
-              class="sticky left-[60px] top-0 z-40 bg-white border-b border-r-4 border-slate-300 p-4 w-[300px] min-w-[300px] text-left align-middle shadow-[6px_0_10px_-4px_rgba(0,0,0,0.08)]"
+              rowspan="2"
+              class="sticky left-[60px] top-0 z-40 bg-white border-b border-r-4 border-slate-300 p-4 w-[240px] text-left shadow-[6px_0_10px_-4px_rgba(0,0,0,0.08)]"
             >
-              <span class="text-xs font-bold text-slate-500 uppercase tracking-wider"
-                >Identitas Siswa</span
-              >
+              <span class="text-xs font-bold text-slate-500 uppercase">Identitas Siswa</span>
             </th>
+
             <th
+              rowspan="2"
               class="sticky top-0 z-30 bg-indigo-50 border-b border-r border-slate-200 p-4 w-[180px] text-center align-middle h-[56px]"
             >
               <p
@@ -5470,6 +6041,7 @@ const exportKeExcel = () => {
               </p>
             </th>
             <th
+              rowspan="2"
               class="sticky top-0 z-30 bg-emerald-50 border-b border-r border-slate-200 p-4 w-[180px] text-center align-middle h-[56px]"
             >
               <p
@@ -5482,6 +6054,7 @@ const exportKeExcel = () => {
               </p>
             </th>
             <th
+              rowspan="2"
               class="sticky top-0 z-30 bg-slate-100 border-b border-slate-300 p-4 text-center align-middle h-[56px]"
             >
               <p class="text-xs font-black text-slate-800 uppercase tracking-wider leading-tight">
@@ -6533,13 +7106,16 @@ const eksekusiAbsensiKehadiran = async (inputKarakter) => {
 📄 FILE: src/views/siswa/RaporSiswaView.vue
 ============================================================
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { db } from '../../firebase'
 import { doc, getDoc, collection, getDocs } from 'firebase/firestore'
 
 const nisLogin = ref(localStorage.getItem('user_nip') || '')
 const sedangMemuat = ref(true)
-const daftarRapor = ref([])
+
+// STATE BARU: Menyimpan data mentah kelas & status semester
+const kelasDataMentah = ref([])
+const semesterAktif = ref('1')
 
 onMounted(async () => {
   sedangMemuat.value = true
@@ -6553,25 +7129,15 @@ onMounted(async () => {
 
       if (rombelAktifSiswa) {
         const kelasSnap = await getDocs(collection(db, 'kelas'))
-        const hasilRapor = []
+        const tempKelas = []
 
         kelasSnap.forEach((k) => {
           const kelasData = k.data()
-
           if (kelasData.rombel_target && kelasData.rombel_target.includes(rombelAktifSiswa)) {
-            const hasilKalkulasi = hitungRaporKelas(kelasData, nisLogin.value)
-            if (hasilKalkulasi) {
-              hasilRapor.push({
-                id: k.id,
-                nama_matpel: kelasData.nama_matpel,
-                guru_nama: kelasData.guru_nama,
-                tahun_ajaran: kelasData.tahun_ajaran,
-                ...hasilKalkulasi,
-              })
-            }
+            tempKelas.push({ id: k.id, ...kelasData })
           }
         })
-        daftarRapor.value = hasilRapor.sort((a, b) => a.nama_matpel.localeCompare(b.nama_matpel))
+        kelasDataMentah.value = tempKelas
       }
     }
   } catch (error) {
@@ -6580,21 +7146,44 @@ onMounted(async () => {
   sedangMemuat.value = false
 })
 
-const hitungRaporKelas = (kelasData, nis) => {
+// COMPUTED BARU: Kalkulasi rapor otomatis menyesuaikan semester yang dipilih
+const daftarRapor = computed(() => {
+  if (kelasDataMentah.value.length === 0) return []
+
+  const hasilRapor = []
+  kelasDataMentah.value.forEach((kelasData) => {
+    const hasilKalkulasi = hitungRaporKelas(kelasData, nisLogin.value, semesterAktif.value)
+    if (hasilKalkulasi) {
+      hasilRapor.push({
+        id: kelasData.id,
+        nama_matpel: kelasData.nama_matpel,
+        guru_nama: kelasData.guru_nama,
+        tahun_ajaran: kelasData.tahun_ajaran,
+        ...hasilKalkulasi,
+      })
+    }
+  })
+  return hasilRapor.sort((a, b) => a.nama_matpel.localeCompare(b.nama_matpel))
+})
+
+const hitungRaporKelas = (kelasData, nis, semesterTarget) => {
   const siswaData = kelasData.siswa?.find((s) => s.nis === nis)
   if (!siswaData) return null
 
-  // 1. Cek Ketuntasan & Kalkulasi Nilai Pembelajaran
+  // FILTER MATERI BERDASARKAN SEMESTER SAJA
+  const struktur = (kelasData.struktur_materi || []).filter(
+    (bab) => (bab.semester || '1') === semesterTarget,
+  )
+
   let totalMateriKBM = 0
   let selesaiMateriKBM = 0
   let totalMateri = 0,
-    selesaiMateri = 0,
-    totalNilaiTugas = 0,
-    countTugas = 0,
-    totalNilaiKuis = 0,
+    selesaiMateri = 0
+  let totalNilaiTugas = 0,
+    countTugas = 0
+  let totalNilaiKuis = 0,
     countKuis = 0
 
-  const struktur = kelasData.struktur_materi || []
   struktur.forEach((bab) => {
     bab.sub_bab?.forEach((sub) => {
       totalMateriKBM++
@@ -6623,10 +7212,12 @@ const hitungRaporKelas = (kelasData, nis) => {
     })
   })
 
-  // Status Tuntas: Semua materi ada dan sudah dikerjakan/dinilai semua
-  const isTuntas = totalMateriKBM > 0 && selesaiMateriKBM === totalMateriKBM
+  // Jika semester ini belum ada materi, tandai agar UI bisa menampilkan pesan khusus
+  if (totalMateriKBM === 0) {
+    return { isTuntas: false, pembelajaran: 0, kehadiran: 0, final: 0, adaMateri: false }
+  }
 
-  // Kalkulasi Nilai Pembelajaran berdasarkan persentase
+  const isTuntas = totalMateriKBM > 0 && selesaiMateriKBM === totalMateriKBM
   const formulaRapor = kelasData.pengaturan_rapor || { materi: 20, tugas: 30, kuis: 50 }
   const capaianMateri = totalMateri > 0 ? (selesaiMateri / totalMateri) * 100 : 0
   const rataTugas = countTugas > 0 ? totalNilaiTugas / countTugas : 0
@@ -6637,7 +7228,6 @@ const hitungRaporKelas = (kelasData, nis) => {
     rataTugas * (formulaRapor.tugas / 100) +
     rataKuis * (formulaRapor.kuis / 100)
 
-  // 2. Kalkulasi Nilai Kehadiran (Khusus rombel siswa)
   let totalHadir = 0
   const pertemuanKhusus = (kelasData.pertemuan || []).filter((p) => p.rombel === siswaData.rombel)
   const totalSesi = pertemuanKhusus.length
@@ -6648,8 +7238,6 @@ const hitungRaporKelas = (kelasData, nis) => {
     })
   }
   const nilaiKehadiran = totalSesi > 0 ? (totalHadir / totalSesi) * 100 : 0
-
-  // 3. Kalkulasi Nilai Akhir (Berdasarkan bobot rekapitulasi)
   const bobotRekap = kelasData.bobot_rekap || { pembelajaran: 70, kehadiran: 30 }
   const pmb = isNaN(nilaiPembelajaran) ? 0 : Math.round(nilaiPembelajaran)
   const khd = isNaN(nilaiKehadiran) ? 0 : Math.round(nilaiKehadiran)
@@ -6661,6 +7249,7 @@ const hitungRaporKelas = (kelasData, nis) => {
     pembelajaran: pmb,
     kehadiran: khd,
     final: isNaN(finalScore) ? 0 : Math.round(finalScore),
+    adaMateri: true,
   }
 }
 </script>
@@ -6674,8 +7263,37 @@ const hitungRaporKelas = (kelasData, nis) => {
         </h1>
         <p class="text-sm text-slate-500 mt-2 max-w-2xl leading-relaxed">
           Pantau hasil evaluasi belajar dan persentase kehadiran Anda. Nilai Akhir hanya akan
-          diterbitkan oleh sistem jika Anda telah menyelesaikan seluruh rangkaian materi kelas.
+          diterbitkan oleh sistem jika Anda telah menyelesaikan seluruh rangkaian materi kelas di
+          semester tersebut.
         </p>
+      </div>
+
+      <div
+        v-if="!sedangMemuat && kelasDataMentah.length > 0"
+        class="flex bg-white p-1 border border-slate-200 rounded-xl max-w-sm mb-6 shadow-sm"
+      >
+        <button
+          @click="semesterAktif = '1'"
+          :class="[
+            'flex-1 py-2.5 text-sm font-bold rounded-lg transition-colors',
+            semesterAktif === '1'
+              ? 'bg-emerald-50 text-emerald-700 shadow-sm border border-emerald-100'
+              : 'text-slate-500 hover:bg-slate-50',
+          ]"
+        >
+          Semester Ganjil
+        </button>
+        <button
+          @click="semesterAktif = '2'"
+          :class="[
+            'flex-1 py-2.5 text-sm font-bold rounded-lg transition-colors',
+            semesterAktif === '2'
+              ? 'bg-emerald-50 text-emerald-700 shadow-sm border border-emerald-100'
+              : 'text-slate-500 hover:bg-slate-50',
+          ]"
+        >
+          Semester Genap
+        </button>
       </div>
 
       <div
@@ -6710,8 +7328,12 @@ const hitungRaporKelas = (kelasData, nis) => {
           :key="rapor.id"
           class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col lg:flex-row relative group hover:border-emerald-300 transition-colors"
         >
-          <!-- Indikator Strip Samping Kiri -->
-          <div :class="['w-2 shrink-0', rapor.isTuntas ? 'bg-emerald-500' : 'bg-slate-200']"></div>
+          <div
+            :class="[
+              'w-2 shrink-0',
+              rapor.adaMateri && rapor.isTuntas ? 'bg-emerald-500' : 'bg-slate-200',
+            ]"
+          ></div>
 
           <div class="p-6 lg:p-8 flex-1 flex flex-col">
             <div class="flex items-center justify-between mb-4">
@@ -6721,7 +7343,7 @@ const hitungRaporKelas = (kelasData, nis) => {
                 TA. {{ rapor.tahun_ajaran }}
               </span>
               <span
-                v-if="rapor.isTuntas"
+                v-if="rapor.adaMateri && rapor.isTuntas"
                 class="text-[10px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-md flex items-center gap-1"
               >
                 ✓ Kelas Tuntas
@@ -6733,7 +7355,7 @@ const hitungRaporKelas = (kelasData, nis) => {
             </h3>
             <p class="text-xs font-bold text-slate-500 mb-8">{{ rapor.guru_nama }}</p>
 
-            <div class="grid grid-cols-2 gap-4 mt-auto">
+            <div v-if="rapor.adaMateri" class="grid grid-cols-2 gap-4 mt-auto">
               <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
                 <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
                   Rata-rata Tugas & Ujian
@@ -6749,9 +7371,17 @@ const hitungRaporKelas = (kelasData, nis) => {
                 </p>
               </div>
             </div>
+
+            <div
+              v-else
+              class="mt-auto bg-slate-50 p-4 rounded-2xl border border-slate-100 text-center"
+            >
+              <p class="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                Belum Ada Materi di Semester Ini
+              </p>
+            </div>
           </div>
 
-          <!-- BAGIAN NILAI AKHIR (KANAN) -->
           <div
             class="bg-slate-50 lg:w-48 p-6 lg:p-8 border-t lg:border-t-0 lg:border-l border-slate-100 flex flex-col items-center justify-center text-center shrink-0"
           >
@@ -6759,7 +7389,10 @@ const hitungRaporKelas = (kelasData, nis) => {
               Nilai Akhir Pembelajaran
             </p>
 
-            <div v-if="rapor.isTuntas" class="flex flex-col items-center justify-center">
+            <div
+              v-if="rapor.adaMateri && rapor.isTuntas"
+              class="flex flex-col items-center justify-center"
+            >
               <p class="text-6xl font-black text-slate-800 tracking-tighter">{{ rapor.final }}</p>
               <div
                 class="mt-4 px-3 py-1 bg-emerald-100 text-emerald-700 text-[9px] font-black uppercase tracking-widest rounded border border-emerald-200"
@@ -6807,9 +7440,11 @@ import { db } from '../../firebase'
 import { doc, getDoc, updateDoc } from 'firebase/firestore'
 import SidebarSilabus from './ruang-kelas/SidebarSilabus.vue'
 import CanvasBelajar from './ruang-kelas/CanvasBelajar.vue'
+import { useUiStore } from '../../stores/uiStore'
 
 const route = useRoute()
 const router = useRouter()
+const uiStore = useUiStore()
 const idKelas = route.params.id
 const nisLogin = localStorage.getItem('user_nip')
 
@@ -6832,6 +7467,18 @@ const waktuTeks = computed(() => {
   return `${m}:${s}`
 })
 
+// STATE BARU: Semester aktif untuk tampilan siswa (Default 1)
+const semesterAktif = ref('1')
+
+// COMPUTED BARU: Menyaring bab berdasarkan semester aktif
+const strukturMateriTerfilter = computed(() => {
+  if (!kelas.value || !kelas.value.struktur_materi) return []
+  return kelas.value.struktur_materi.filter((bab) => {
+    const sem = bab.semester || '1'
+    return sem === semesterAktif.value
+  })
+})
+
 const ambilDataKelas = async () => {
   sedangMemuat.value = true
   try {
@@ -6844,13 +7491,18 @@ const ambilDataKelas = async () => {
 
       if (data.materi_terakhir) {
         let foundSub = null
+        let foundSemester = '1' // Lacak semester dari materi terakhir
         data.struktur_materi.forEach((bab) => {
           if (bab.sub_bab) {
             const match = bab.sub_bab.find((s) => s.id === data.materi_terakhir)
-            if (match) foundSub = match
+            if (match) {
+              foundSub = match
+              foundSemester = bab.semester || '1'
+            }
           }
         })
         if (foundSub) {
+          semesterAktif.value = foundSemester // Otomatis buka semester materi terakhir
           muatSubBab(foundSub)
         }
       }
@@ -6896,18 +7548,20 @@ const statusSubBabAktif = computed(() => {
   return 'belum'
 })
 
+// PERBAIKAN: Gunakan strukturMateriTerfilter agar nama bab akurat per semester
 const namaBabAktif = computed(() => {
-  if (!kelas.value || !subBabAktif.value) return ''
-  const bab = kelas.value.struktur_materi.find(
+  if (!strukturMateriTerfilter.value || !subBabAktif.value) return ''
+  const bab = strukturMateriTerfilter.value.find(
     (b) => b.sub_bab && b.sub_bab.some((s) => s.id === subBabAktif.value.id),
   )
   return bab ? bab.judul : ''
 })
 
+// PERBAIKAN: Tombol Selanjutnya/Sebelumnya hanya membaca materi di SEMESTER yang sedang dibuka
 const daftarUrutanMateri = computed(() => {
-  if (!kelas.value || !kelas.value.struktur_materi) return []
+  if (!strukturMateriTerfilter.value) return []
   const urutan = []
-  kelas.value.struktur_materi.forEach((bab) => {
+  strukturMateriTerfilter.value.forEach((bab) => {
     if (bab.sub_bab) {
       bab.sub_bab.forEach((sub) => {
         urutan.push({ babId: bab.id, sub })
@@ -6997,7 +7651,6 @@ const navigasiSelanjutnya = async () => {
 }
 
 const navigasiSebelumnya = () => {
-  // PENCEGAHAN KLIK TOMBOL 'SEBELUMNYA' JIKA TIMER AKTIF
   if (sisaDetik.value > 0) {
     if (
       !confirm(
@@ -7022,6 +7675,7 @@ const kirimTugas = async (payload) => {
     nilai_pembelajaran: 'menunggu',
     waktu_kumpul: new Date().toISOString(),
   })
+  uiStore.hideLoading()
   alert('Tugas berhasil dikumpulkan dan menunggu penilaian.')
 }
 
@@ -7031,6 +7685,7 @@ const kirimKuis = async (jawaban) => {
     nilai_pembelajaran: 'menunggu',
     waktu_kumpul: new Date().toISOString(),
   })
+  uiStore.hideLoading()
   alert('Jawaban kuis berhasil dikumpulkan!')
 }
 </script>
@@ -7043,15 +7698,23 @@ const kirimKuis = async (jawaban) => {
       class="absolute inset-0 bg-slate-900/40 z-40 lg:hidden backdrop-blur-sm transition-opacity"
     ></div>
 
-    <!-- KIRIM PROPS sedangMembaca -->
+    <!-- KIRIM PROPS SEMESTER DAN MATERI TERFILTER KE SIDEBAR -->
     <SidebarSilabus
       :kelas="kelas"
+      :materi-terfilter="strukturMateriTerfilter"
+      :semester-aktif="semesterAktif"
       :bab-terbuka="babTerbuka"
       :sub-bab-aktif="subBabAktif"
       :nis-login="nisLogin"
       :tampil-sidebar-mobile="tampilSidebarMobile"
       :tampil-sidebar-desktop="tampilSidebarDesktop"
       :sedang-membaca="sisaDetik > 0"
+      @ganti-semester="
+        (val) => {
+          semesterAktif = val
+          subBabAktif = null
+        }
+      "
       @toggle-bab="toggleBab"
       @muat-sub-bab="muatSubBab"
       @keluar-kelas="router.push('/siswa')"
@@ -7104,7 +7767,7 @@ const kirimKuis = async (jawaban) => {
           </div>
           <h2 class="text-lg font-black text-slate-800 mb-2">Pilih Materi Pembelajaran</h2>
           <p class="text-sm font-medium text-slate-500 max-w-sm leading-relaxed">
-            Buka menu silabus di sebelah kiri untuk mulai membaca materi kelas.
+            Buka menu silabus di sebelah kiri untuk mulai membaca materi kelas pada semester ini.
           </p>
         </div>
       </div>
@@ -8110,15 +8773,23 @@ import { computed } from 'vue'
 
 const props = defineProps({
   kelas: Object,
+  materiTerfilter: Array, // Menerima data bab yang sudah difilter per semester dari parent
+  semesterAktif: String, // Menerima string '1' atau '2'
   babTerbuka: Array,
   subBabAktif: Object,
   nisLogin: String,
   tampilSidebarMobile: Boolean,
   tampilSidebarDesktop: Boolean,
-  sedangMembaca: Boolean, // Menerima status timer aktif dari parent
+  sedangMembaca: Boolean,
 })
 
-const emit = defineEmits(['toggle-bab', 'muat-sub-bab', 'keluar-kelas', 'sembunyikan-silabus'])
+const emit = defineEmits([
+  'toggle-bab',
+  'muat-sub-bab',
+  'keluar-kelas',
+  'sembunyikan-silabus',
+  'ganti-semester',
+])
 
 // Mengambil data progres siswa saat ini
 const dataSiswaSaatIni = computed(() => {
@@ -8140,11 +8811,11 @@ const cekStatusSubBab = (idSub) => {
   return 'belum'
 }
 
-// 1. LOGIKA INTI: Mencari nomor urut indeks global dari sebuah materi (1, 2, 3, dst)
+// LOGIKA INTI: Menggunakan materiTerfilter agar urutan gembok ter-reset setiap pindah semester
 const getUrutanGlobal = (idSub) => {
-  if (!idSub || !props.kelas || !props.kelas.struktur_materi) return -1
+  if (!idSub || !props.materiTerfilter) return -1
   let urutan = 0
-  for (const bab of props.kelas.struktur_materi) {
+  for (const bab of props.materiTerfilter) {
     if (bab.sub_bab) {
       for (const s of bab.sub_bab) {
         urutan++
@@ -8155,24 +8826,21 @@ const getUrutanGlobal = (idSub) => {
   return -1
 }
 
-// 2. LOGIKA INTI: Menentukan batas urutan maksimal materi yang BOLEH diakses siswa saat ini
 const urutanMaksimalBolehAkses = computed(() => {
-  if (!props.kelas || !props.kelas.struktur_materi) return 1
+  if (!props.materiTerfilter) return 1
 
   let urutan = 0
   let batasMaju = 1
   let ditemukanBatas = false
 
-  for (const bab of props.kelas.struktur_materi) {
+  for (const bab of props.materiTerfilter) {
     if (bab.sub_bab) {
       for (const sub of bab.sub_bab) {
         urutan++
         const status = cekStatusSubBab(sub.id)
 
         if (!ditemukanBatas) {
-          // Selama materi di belakang berstatus selesai/dinilai/menunggu, batas maju terus bertambah
           batasMaju = urutan
-          // Kunci batas atas begitu menemukan materi pertama yang belum dikerjakan atau perlu perbaikan
           if (status === 'belum' || status === 'revisi') {
             ditemukanBatas = true
           }
@@ -8183,11 +8851,18 @@ const urutanMaksimalBolehAkses = computed(() => {
   return batasMaju
 })
 
+const gantiTabSemester = (sem) => {
+  if (props.sedangMembaca) {
+    if (!confirm('⏳ Waktu baca materi saat ini belum selesai. Yakin ingin berpindah semester?'))
+      return
+  }
+  emit('ganti-semester', sem)
+}
+
 const klikMateri = (sub) => {
   const urutanTujuan = getUrutanGlobal(sub.id)
   const urutanAktif = getUrutanGlobal(props.subBabAktif?.id)
 
-  // VALIDASI 1: Cek apakah tujuan klik melompati batas maju maksimal siswa di database
   if (urutanTujuan > urutanMaksimalBolehAkses.value) {
     alert(
       '🔒 Akses Ditolak: Anda tidak dapat melompati materi! Selesaikan urutan pembelajaran aktif Anda terlebih dahulu.',
@@ -8195,17 +8870,13 @@ const klikMateri = (sub) => {
     return
   }
 
-  // VALIDASI 2: Proteksi jika siswa mencoba berpindah saat TIMER pengerjaan/waktu baca sedang berjalan
   if (props.sedangMembaca && props.subBabAktif?.id !== sub.id) {
-    // Jika mencoba klik melompat ke depan sebelum menekan tombol selesaikan materi
     if (urutanTujuan > urutanAktif) {
       alert(
         '⏳ Batasan Halaman: Selesaikan sisa batas waktu baca materi saat ini terlebih dahulu sebelum berpindah ke depan!',
       )
       return
-    }
-    // Jika diizinkan kembali ke materi lama di belakang
-    else {
+    } else {
       if (
         !confirm(
           '⏳ Jika Anda kembali melihat materi lama, sisa akumulasi waktu baca materi saat ini akan direset dari awal saat Anda kembali nanti. Lanjutkan?',
@@ -8306,6 +8977,32 @@ const klikKeluar = () => {
           </div>
         </div>
       </div>
+
+      <!-- TAB FILTER SEMESTER SISWA -->
+      <div class="flex bg-slate-50 p-1 border border-slate-200 rounded-lg mt-2">
+        <button
+          @click="gantiTabSemester('1')"
+          :class="[
+            'flex-1 py-2 text-xs font-bold rounded-md transition-colors',
+            semesterAktif === '1'
+              ? 'bg-white text-emerald-600 shadow-sm border border-slate-100'
+              : 'text-slate-400 hover:text-slate-600',
+          ]"
+        >
+          Ganjil
+        </button>
+        <button
+          @click="gantiTabSemester('2')"
+          :class="[
+            'flex-1 py-2 text-xs font-bold rounded-md transition-colors',
+            semesterAktif === '2'
+              ? 'bg-white text-emerald-600 shadow-sm border border-slate-100'
+              : 'text-slate-400 hover:text-slate-600',
+          ]"
+        >
+          Genap
+        </button>
+      </div>
     </div>
 
     <div class="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-slate-50/50 w-full">
@@ -8314,8 +9011,15 @@ const klikKeluar = () => {
       </div>
 
       <div
+        v-else-if="!materiTerfilter || materiTerfilter.length === 0"
+        class="text-center text-sm font-bold text-slate-400 py-10"
+      >
+        Belum ada materi di semester ini.
+      </div>
+
+      <div
         v-else
-        v-for="bab in kelas.struktur_materi"
+        v-for="bab in materiTerfilter"
         :key="bab.id"
         class="border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-sm transition-all hover:border-emerald-200"
       >
@@ -8362,13 +9066,9 @@ const klikKeluar = () => {
                   ? 'bg-rose-50 border-rose-200 shadow-sm'
                   : 'bg-emerald-50 border-emerald-200 shadow-sm'
                 : 'bg-white border-transparent hover:border-slate-200 hover:shadow-sm',
-
-              // REVISI TOTAL: Tampilkan visual gembok abu-abu untuk semua materi yang berada di depan batas maju siswa
               getUrutanGlobal(sub.id) > urutanMaksimalBolehAkses
                 ? 'opacity-60 cursor-not-allowed grayscale'
                 : '',
-
-              // PUDARKAN MATERI DEPAN JIKA SEDANG MEMBACA (Mencegah kabur ke depan saat timer jalan)
               sedangMembaca && getUrutanGlobal(sub.id) > getUrutanGlobal(subBabAktif?.id)
                 ? 'opacity-40 cursor-not-allowed filter grayscale-[50%]'
                 : '',
@@ -8378,7 +9078,7 @@ const klikKeluar = () => {
               :class="[
                 'w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[10px] font-black shadow-inner border border-white/50 transition-colors',
                 getUrutanGlobal(sub.id) > urutanMaksimalBolehAkses
-                  ? 'bg-slate-200 text-slate-400' // Kunci mati visual lingkaran nomor
+                  ? 'bg-slate-200 text-slate-400'
                   : cekStatusSubBab(sub.id) === 'selesai' || cekStatusSubBab(sub.id) === 'dinilai'
                     ? 'bg-emerald-500 text-white'
                     : cekStatusSubBab(sub.id) === 'revisi'
